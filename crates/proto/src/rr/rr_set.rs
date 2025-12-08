@@ -328,10 +328,11 @@ impl RecordSet {
             //   the same owner name; in fact, the two can be used cooperatively to
             //   redirect both the owner name address records (via ANAME) and
             //   everything under it (via DNAME).
-            RecordType::CNAME | RecordType::ANAME => {
-                assert!(self.records.len() <= 1);
-                self.records.clear();
-            }
+            // NOTE: 有了线路信息，允许同一个host下，有多个cname，前提是线路不同
+            // RecordType::CNAME | RecordType::ANAME => {
+            //     assert!(self.records.len() <= 1);
+            //     self.records.clear();
+            // }
             _ => (),
         }
 
@@ -340,7 +341,7 @@ impl RecordSet {
             .records
             .iter()
             .enumerate()
-            .filter(|&(_, rr)| rr.data() == record.data())
+            .filter(|&(_, rr)| rr.data() == record.data() && rr.lines() == record.lines())
             .map(|(i, _)| i)
             .collect::<Vec<usize>>();
 
