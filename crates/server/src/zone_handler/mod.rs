@@ -47,9 +47,17 @@ pub use self::message_request::{MessageRequest, Queries, UpdateRequest};
 pub use self::message_response::{MessageResponse, MessageResponseBuilder};
 
 /// Trait for find ip location info
-pub trait IpLocationInfo {
+pub trait IpLocationInfo: Send + Sync {
     /// find ip location info
     fn find_ip(&self, ip: &str) -> Option<LineInfo>;
+}
+
+pub struct FakeLocationInfo;
+
+impl IpLocationInfo for FakeLocationInfo {
+    fn find_ip(&self, _ip: &str) -> Option<LineInfo> {
+        None
+    }
 }
 
 /// ZoneHandler implementations can be used with a `Catalog`
@@ -100,6 +108,7 @@ pub trait ZoneHandler: Send + Sync {
         rtype: RecordType,
         request_info: Option<&RequestInfo<'_>>,
         lookup_options: LookupOptions,
+        ip_location: &dyn IpLocationInfo,
     ) -> LookupControlFlow<AuthLookup>;
 
     /// Consulting lookup for all Resource Records matching the given `Name` and `RecordType`. This
@@ -163,6 +172,7 @@ pub trait ZoneHandler: Send + Sync {
         &self,
         request: &Request,
         lookup_options: LookupOptions,
+        ip_location: &dyn IpLocationInfo,
     ) -> (
         LookupControlFlow<AuthLookup>,
         Option<Box<dyn ResponseSigner>>,

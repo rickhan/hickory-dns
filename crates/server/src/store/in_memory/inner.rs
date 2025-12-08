@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    net::IpAddr,
     sync::Arc,
 };
 #[cfg(feature = "__dnssec")]
@@ -33,7 +34,7 @@ use crate::{
     proto::rr::{
         DNSClass, LowerName, Name, RData, Record, RecordSet, RecordType, RrKey, rdata::SOA,
     },
-    zone_handler::LookupOptions,
+    zone_handler::{IpLocationInfo, LookupOptions},
 };
 
 #[derive(Default)]
@@ -203,19 +204,19 @@ impl InnerInMemory {
         let start_range_key = RrKey::new(name.clone(), RecordType::Unknown(u16::MIN));
         let end_range_key = RrKey::new(name.clone(), RecordType::Unknown(u16::MAX));
 
-        fn aname_covers_type(key_type: RecordType, query_type: RecordType) -> bool {
-            (query_type == RecordType::A || query_type == RecordType::AAAA)
-                && key_type == RecordType::ANAME
-        }
+        // 禁用ANAME
+        // fn aname_covers_type(key_type: RecordType, query_type: RecordType) -> bool {
+        //     (query_type == RecordType::A || query_type == RecordType::AAAA)
+        //         && key_type == RecordType::ANAME
+        // }
 
         let lookup = self
             .records
             .range(&start_range_key..&end_range_key)
             // remember CNAME can be the only record at a particular label
             .find(|(key, _)| {
-                key.record_type == record_type
-                    || key.record_type == RecordType::CNAME
-                    || aname_covers_type(key.record_type, record_type)
+                key.record_type == record_type || key.record_type == RecordType::CNAME
+                /*|| aname_covers_type(key.record_type, record_type)*/
             })
             .map(|(_key, rr_set)| rr_set);
 

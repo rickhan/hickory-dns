@@ -30,8 +30,8 @@ use crate::{
     },
     server::{Request, RequestInfo},
     zone_handler::{
-        AuthLookup, AxfrPolicy, LookupControlFlow, LookupError, LookupOptions, ZoneHandler,
-        ZoneType,
+        AuthLookup, AxfrPolicy, IpLocationInfo, LookupControlFlow, LookupError, LookupOptions,
+        ZoneHandler, ZoneType,
     },
 };
 
@@ -241,6 +241,7 @@ impl<P: ConnectionProvider> ZoneHandler for ForwardZoneHandler<P> {
         rtype: RecordType,
         _request_info: Option<&RequestInfo<'_>>,
         _lookup_options: LookupOptions,
+        _ip_loc: &dyn IpLocationInfo,
     ) -> LookupControlFlow<AuthLookup> {
         // TODO: make this an error?
         debug_assert!(self.origin.zone_of(name));
@@ -263,6 +264,7 @@ impl<P: ConnectionProvider> ZoneHandler for ForwardZoneHandler<P> {
         &self,
         request: &Request,
         lookup_options: LookupOptions,
+        ip_loc: &dyn IpLocationInfo,
     ) -> (
         LookupControlFlow<AuthLookup>,
         Option<Box<dyn ResponseSigner>>,
@@ -277,6 +279,7 @@ impl<P: ConnectionProvider> ZoneHandler for ForwardZoneHandler<P> {
                 request_info.query.query_type(),
                 Some(&request_info),
                 lookup_options,
+                ip_loc,
             )
             .await,
             None,

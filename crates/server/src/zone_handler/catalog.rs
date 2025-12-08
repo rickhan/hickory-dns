@@ -33,7 +33,7 @@ use crate::{
     },
     server::{Request, RequestHandler, RequestInfo, ResponseHandler, ResponseInfo},
     zone_handler::{
-        AuthLookup, LookupControlFlow, LookupError, LookupOptions, LookupRecords,
+        AuthLookup, FakeLocationInfo, LookupControlFlow, LookupError, LookupOptions, LookupRecords,
         MessageResponseBuilder, ZoneHandler, ZoneType,
     },
 };
@@ -489,7 +489,8 @@ async fn lookup<R: ResponseHandler + Unpin>(
 
         // Wait so we can determine if we need to fire a request to the next zone handler in a
         // chained configuration if the current zone handler declines to answer.
-        let (mut result, mut signer) = handler.search(request, lookup_options).await;
+        let ip_loc = FakeLocationInfo;
+        let (mut result, mut signer) = handler.search(request, lookup_options, &ip_loc).await;
         #[cfg(feature = "metrics")]
         metrics.update_zone_lookup(handler.as_ref(), &result);
 
@@ -844,8 +845,14 @@ async fn build_authoritative_response(
         if query.query_type().is_soa() {
             // This was a successful authoritative lookup for SOA:
             //   get the NS records as well.
-
-            let future = handler.lookup(handler.origin(), RecordType::NS, None, lookup_options);
+            let ip_loc = FakeLocationInfo;
+            let future = handler.lookup(
+                handler.origin(),
+                RecordType::NS,
+                None,
+                lookup_options,
+                &ip_loc,
+            );
             match future.await.map_result() {
                 Some(Ok(ns)) => (Some(ns), None),
                 Some(Err(error)) => {
@@ -971,7 +978,14 @@ async fn build_authoritative_response(
             None
         };
 
-        let future = handler.lookup(handler.origin(), RecordType::SOA, None, lookup_options);
+        let ip_loc = FakeLocationInfo;
+        let future = handler.lookup(
+            handler.origin(),
+            RecordType::SOA,
+            None,
+            lookup_options,
+            &ip_loc,
+        );
         match future.await.map_result() {
             Some(Ok(soa)) => (nsecs, Some(soa)),
             Some(Err(error)) => {

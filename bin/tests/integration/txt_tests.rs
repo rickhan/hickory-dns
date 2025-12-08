@@ -87,6 +87,7 @@ tech.   3600    in      soa     ns0.centralnic.net.     hostmaster.centralnic.ne
     let (origin, records) = records.unwrap();
 
     let handler: InMemoryZoneHandler = InMemoryZoneHandler::new(
+        0,
         origin,
         records,
         ZoneType::Primary,
@@ -540,6 +541,7 @@ a       A       127.0.0.1
 
     assert!(
         InMemoryZoneHandler::<TokioRuntimeProvider>::new(
+            0,
             origin,
             records,
             ZoneType::Primary,
@@ -578,6 +580,7 @@ b       A       127.0.0.2
 
     assert!(
         InMemoryZoneHandler::<TokioRuntimeProvider>::new(
+            0,
             origin,
             records,
             ZoneType::Primary,
@@ -615,6 +618,7 @@ a       A       127.0.0.1
 
     assert!(
         InMemoryZoneHandler::<TokioRuntimeProvider>::new(
+            0,
             origin,
             records,
             ZoneType::Primary,

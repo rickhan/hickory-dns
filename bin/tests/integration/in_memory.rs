@@ -20,6 +20,7 @@ fn test_cname_loop() {
 
     let runtime = Runtime::new().expect("failed to create Tokio Runtime");
     let mut auth = InMemoryZoneHandler::<TokioRuntimeProvider>::empty(
+        0,
         Name::from_str("example.com.").unwrap(),
         ZoneType::Primary,
         AxfrPolicy::Deny,

@@ -16,6 +16,7 @@ fn file(zone_path: &Path, _module: &str, _test_name: &str) -> FileZoneHandler {
     };
 
     FileZoneHandler::try_from_config(
+        0,
         Name::from_str("example.com.").unwrap(),
         ZoneType::Primary,
         AxfrPolicy::Deny,
@@ -39,6 +40,7 @@ fn test_all_lines_are_loaded() {
     };
 
     let mut handler = FileZoneHandler::try_from_config(
+        0,
         Name::from_str("example.com.").unwrap(),
         ZoneType::Primary,
         AxfrPolicy::Deny,
@@ -63,6 +65,7 @@ fn test_implicit_in_class() {
     };
 
     let handler = FileZoneHandler::try_from_config(
+        0,
         Name::from_str("example.com.").unwrap(),
         ZoneType::Primary,
         AxfrPolicy::Deny,
@@ -83,6 +86,7 @@ async fn test_ttl_wildcard() {
 
     let zone_name = LowerName::from_str("test.local.").unwrap();
     let mut handler = FileZoneHandler::try_from_config(
+        0,
         Name::from(zone_name.clone()),
         ZoneType::Primary,
         AxfrPolicy::Deny,

@@ -33,6 +33,7 @@ fn sqlite(zone_path: &Path, module: &str, test_name: &str) -> SqliteZoneHandler 
     };
 
     block_on(SqliteZoneHandler::try_from_config(
+        0,
         Name::from_str("example.com.").unwrap(),
         ZoneType::Primary,
         AxfrPolicy::Deny,
@@ -65,6 +66,7 @@ fn sqlite_update(zone_path: &Path, module: &str, test_name: &str) -> SqliteZoneH
     };
 
     block_on(SqliteZoneHandler::try_from_config(
+        0,
         Name::from_str("example.com.").unwrap(),
         ZoneType::Primary,
         AxfrPolicy::Deny,

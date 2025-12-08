@@ -397,6 +397,7 @@ impl ZoneConfig {
                             #[cfg_attr(not(feature = "__dnssec"), allow(unused_mut))]
                             let mut handler =
                                 SqliteZoneHandler::<TokioRuntimeProvider>::try_from_config(
+                                    0,
                                     zone_name.clone(),
                                     zone_type,
                                     axfr_policy,
@@ -417,6 +418,7 @@ impl ZoneConfig {
                         ServerStoreConfig::File(config) => {
                             #[cfg_attr(not(feature = "__dnssec"), allow(unused_mut))]
                             let mut handler = FileZoneHandler::try_from_config(
+                                0,
                                 zone_name.clone(),
                                 zone_type,
                                 axfr_policy,

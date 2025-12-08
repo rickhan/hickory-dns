@@ -11,6 +11,7 @@ use std::{
     collections::BTreeMap,
     fs,
     marker::PhantomData,
+    net::{IpAddr, Ipv4Addr},
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
@@ -44,8 +45,8 @@ use crate::{
     },
     server::{Request, RequestInfo},
     zone_handler::{
-        AuthLookup, AxfrPolicy, AxfrRecords, LookupControlFlow, LookupError, LookupOptions,
-        LookupRecords, ZoneHandler, ZoneTransfer, ZoneType,
+        AuthLookup, AxfrPolicy, AxfrRecords, FakeLocationInfo, IpLocationInfo, LookupControlFlow,
+        LookupError, LookupOptions, LookupRecords, ZoneHandler, ZoneTransfer, ZoneType,
     },
 };
 
@@ -381,8 +382,9 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
         &self,
         name: &LowerName,
         mut query_type: RecordType,
-        _request_info: Option<&RequestInfo<'_>>,
+        request_info: Option<&RequestInfo<'_>>,
         lookup_options: LookupOptions,
+        ip_loc: &dyn IpLocationInfo,
     ) -> LookupControlFlow<AuthLookup> {
         let inner = self.inner.read().await;
 
@@ -395,6 +397,12 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
         if query_type == RecordType::ANY {
             query_type = inner.replace_any(name);
         }
+
+        let remote_addr = if let Some(r) = request_info {
+            r.src.ip()
+        } else {
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        };
 
         let answer = inner.inner_lookup(name, query_type, lookup_options);
 
@@ -510,6 +518,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
         &self,
         request: &Request,
         lookup_options: LookupOptions,
+        ip_loc: &dyn IpLocationInfo,
     ) -> (
         LookupControlFlow<AuthLookup>,
         Option<Box<dyn ResponseSigner>>,
@@ -531,6 +540,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
                     record_type,
                     Some(&request_info),
                     lookup_options,
+                    ip_loc,
                 )
                 .await,
                 None,
@@ -548,6 +558,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
                     record_type,
                     Some(&request_info),
                     lookup_options,
+                    ip_loc,
                 )
                 .await,
                 None,
@@ -576,7 +587,13 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
             }
         }
 
-        let future = self.lookup(self.origin(), RecordType::SOA, None, lookup_options);
+        let future = self.lookup(
+            self.origin(),
+            RecordType::SOA,
+            None,
+            lookup_options,
+            &FakeLocationInfo,
+        );
         let start_soa = if let LookupControlFlow::Continue(Ok(res)) = future.await {
             res.unwrap_records()
         } else {
@@ -588,6 +605,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
             RecordType::SOA,
             None,
             LookupOptions::default(),
+            &FakeLocationInfo,
         );
         let end_soa = if let LookupControlFlow::Continue(Ok(res)) = future.await {
             res.unwrap_records()

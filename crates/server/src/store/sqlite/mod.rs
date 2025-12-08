@@ -18,6 +18,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::zone_handler::{FakeLocationInfo, IpLocationInfo};
 use futures_util::lock::Mutex;
 use serde::Deserialize;
 use tracing::{debug, error, info, warn};
@@ -417,6 +418,7 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                                         RecordType::ANY,
                                         None,
                                         LookupOptions::default(),
+                                        &FakeLocationInfo,
                                     )
                                     .await
                                     .unwrap_or_default()
@@ -430,7 +432,13 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                             // ANY      rrset    empty    RRset exists (value independent)
                             rrset => {
                                 if self
-                                    .lookup(&required_name, rrset, None, LookupOptions::default())
+                                    .lookup(
+                                        &required_name,
+                                        rrset,
+                                        None,
+                                        LookupOptions::default(),
+                                        &FakeLocationInfo,
+                                    )
                                     .await
                                     .unwrap_or_default()
                                     .was_empty()
@@ -456,6 +464,7 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                                         RecordType::ANY,
                                         None,
                                         LookupOptions::default(),
+                                        &FakeLocationInfo,
                                     )
                                     .await
                                     .unwrap_or_default()
@@ -469,7 +478,13 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                             // NONE     rrset    empty    RRset does not exist
                             rrset => {
                                 if !self
-                                    .lookup(&required_name, rrset, None, LookupOptions::default())
+                                    .lookup(
+                                        &required_name,
+                                        rrset,
+                                        None,
+                                        LookupOptions::default(),
+                                        &FakeLocationInfo,
+                                    )
                                     .await
                                     .unwrap_or_default()
                                     .was_empty()
@@ -493,6 +508,7 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                             require.record_type(),
                             None,
                             LookupOptions::default(),
+                            &FakeLocationInfo,
                         )
                         .await
                         .unwrap_or_default()
@@ -1109,9 +1125,10 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for SqliteZoneHandler<P> {
         rtype: RecordType,
         request_info: Option<&RequestInfo<'_>>,
         lookup_options: LookupOptions,
+        ip_loc: &dyn IpLocationInfo,
     ) -> LookupControlFlow<AuthLookup> {
         self.in_memory
-            .lookup(name, rtype, request_info, lookup_options)
+            .lookup(name, rtype, request_info, lookup_options, ip_loc)
             .await
     }
 
@@ -1119,6 +1136,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for SqliteZoneHandler<P> {
         &self,
         request: &Request,
         lookup_options: LookupOptions,
+        ip_loc: &dyn IpLocationInfo,
     ) -> (
         LookupControlFlow<AuthLookup>,
         Option<Box<dyn ResponseSigner>>,
@@ -1137,7 +1155,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for SqliteZoneHandler<P> {
             );
         }
 
-        let (search, _) = self.in_memory.search(request, lookup_options).await;
+        let (search, _) = self.in_memory.search(request, lookup_options, ip_loc).await;
 
         (search, None)
     }

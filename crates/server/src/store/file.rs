@@ -30,8 +30,8 @@ use crate::{
     server::{Request, RequestInfo},
     store::in_memory::{InMemoryZoneHandler, zone_from_path},
     zone_handler::{
-        AuthLookup, AxfrPolicy, LookupControlFlow, LookupError, LookupOptions, ZoneHandler,
-        ZoneTransfer, ZoneType,
+        AuthLookup, AxfrPolicy, IpLocationInfo, LookupControlFlow, LookupError, LookupOptions,
+        ZoneHandler, ZoneTransfer, ZoneType,
     },
 };
 
@@ -170,9 +170,10 @@ impl ZoneHandler for FileZoneHandler {
         rtype: RecordType,
         request_info: Option<&RequestInfo<'_>>,
         lookup_options: LookupOptions,
+        ip_loc: &dyn IpLocationInfo,
     ) -> LookupControlFlow<AuthLookup> {
         self.in_memory
-            .lookup(name, rtype, request_info, lookup_options)
+            .lookup(name, rtype, request_info, lookup_options, ip_loc)
             .await
     }
 
@@ -191,11 +192,12 @@ impl ZoneHandler for FileZoneHandler {
         &self,
         request: &Request,
         lookup_options: LookupOptions,
+        ip_loc: &dyn IpLocationInfo,
     ) -> (
         LookupControlFlow<AuthLookup>,
         Option<Box<dyn ResponseSigner>>,
     ) {
-        self.in_memory.search(request, lookup_options).await
+        self.in_memory.search(request, lookup_options, ip_loc).await
     }
 
     async fn zone_transfer(
@@ -286,7 +288,10 @@ pub(crate) fn rooted(zone_file: &Path, root_dir: Option<&Path>) -> PathBuf {
 mod tests {
     use std::str::FromStr;
 
-    use crate::proto::rr::{RData, rdata::A};
+    use crate::{
+        proto::rr::{RData, rdata::A},
+        zone_handler::FakeLocationInfo,
+    };
 
     use futures_executor::block_on;
     use test_support::subscribe;
@@ -324,6 +329,7 @@ mod tests {
             RecordType::A,
             None,
             LookupOptions::default(),
+            &FakeLocationInfo,
         ))
         .expect("lookup failed");
 
@@ -343,6 +349,7 @@ mod tests {
             RecordType::A,
             None,
             LookupOptions::default(),
+            &FakeLocationInfo,
         ))
         .expect("INCLUDE lookup failed");
 
