@@ -82,7 +82,7 @@ pub struct Record<R: RecordData = RData> {
     mdns_cache_flush: bool,
     #[cfg(feature = "__dnssec")]
     proof: Proof,
-    lines: Option<Vec<LineInfo>>,
+    line_info: Option<LineInfo>,
 }
 
 impl Record {
@@ -97,7 +97,7 @@ impl Record {
             mdns_cache_flush: false,
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
-            lines: None,
+            line_info: None,
         }
     }
 }
@@ -114,7 +114,7 @@ impl Record {
             mdns_cache_flush: false,
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
-            lines: None,
+            line_info: None,
         }
     }
 
@@ -145,7 +145,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush: false,
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
-            lines: None,
+            line_info: None,
         }
     }
 
@@ -160,7 +160,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
-            lines,
+            line_info,
         } = self;
 
         Some(Record {
@@ -172,7 +172,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
-            lines,
+            line_info,
         })
     }
 
@@ -187,7 +187,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
-            lines,
+            line_info,
         } = self;
 
         let rdata: RData = RecordData::into_rdata(rdata);
@@ -201,7 +201,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
-            lines,
+            line_info,
         }
     }
 
@@ -263,8 +263,8 @@ impl<R: RecordData> Record<R> {
     }
 
     /// Set the Lines information for this record
-    pub fn set_lines(&mut self, lines: Option<Vec<LineInfo>>) -> &mut Self {
-        self.lines = lines;
+    pub fn set_line(&mut self, line_info: Option<LineInfo>) -> &mut Self {
+        self.line_info = line_info;
         self
     }
 
@@ -334,8 +334,8 @@ impl<R: RecordData> Record<R> {
 
     /// The Lines information of this record
     #[inline]
-    pub fn lines(&self) -> &Option<Vec<LineInfo>> {
-        &self.lines
+    pub fn line_info(&self) -> &Option<LineInfo> {
+        &self.line_info
     }
 }
 
@@ -356,8 +356,8 @@ pub struct RecordParts<R: RecordData = RData> {
     /// mDNS cache flush
     #[cfg(feature = "__dnssec")]
     pub proof: Proof,
-    /// lines info
-    pub lines: Option<Vec<LineInfo>>,
+    /// line info
+    pub line_info: Option<LineInfo>,
 }
 
 impl<R: RecordData> From<Record<R>> for RecordParts<R> {
@@ -371,7 +371,7 @@ impl<R: RecordData> From<Record<R>> for RecordParts<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
-            lines,
+            line_info,
         } = record;
 
         Self {
@@ -383,7 +383,7 @@ impl<R: RecordData> From<Record<R>> for RecordParts<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
-            lines,
+            line_info,
         }
     }
 }
@@ -517,7 +517,7 @@ impl<'r> BinDecodable<'r> for Record<RData> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
-            lines: None,
+            line_info: None,
         })
     }
 }
@@ -741,7 +741,7 @@ impl<R: RecordData> RecordRef<'_, R> {
             mdns_cache_flush: self.mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof: self.proof,
-            lines: None,
+            line_info: None,
         }
     }
 
@@ -804,7 +804,7 @@ impl<'a, R: RecordData> TryFrom<&'a Record> for RecordRef<'a, R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
-            lines,
+            line_info,
         } = record;
 
         match R::try_borrow(rdata) {

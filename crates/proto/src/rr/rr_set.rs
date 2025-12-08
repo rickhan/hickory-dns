@@ -8,7 +8,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::{iter::Chain, slice::Iter};
-use std::string::String;
 use tracing::{info, warn};
 
 use crate::rr::{DNSClass, LineInfo, Name, RData, Record, RecordType};
@@ -218,10 +217,10 @@ impl RecordSet {
     }
 
     /// creates a new Record as part of this RecordSet, adding the associated RData and lines
-    pub fn add_rdata_line(&mut self, rdata: RData, lines: Option<Vec<LineInfo>>) -> bool {
+    pub fn add_rdata_line(&mut self, rdata: RData, lines: Option<LineInfo>) -> bool {
         debug_assert_eq!(self.record_type, rdata.record_type());
         let mut record = Record::from_rdata(self.name.clone(), self.ttl, rdata);
-        record.set_lines(lines);
+        record.set_line(lines);
         self.insert(record, 0)
     }
     /// Inserts a new Resource Record into the Set.
@@ -341,7 +340,7 @@ impl RecordSet {
             .records
             .iter()
             .enumerate()
-            .filter(|&(_, rr)| rr.data() == record.data() && rr.lines() == record.lines())
+            .filter(|&(_, rr)| rr.data() == record.data() && rr.line_info() == record.line_info())
             .map(|(i, _)| i)
             .collect::<Vec<usize>>();
 
@@ -424,7 +423,7 @@ impl RecordSet {
 
     /// Has line info for this record set
     pub fn has_line_info(&self) -> bool {
-        self.records.iter().any(|f| f.lines().is_some())
+        self.records.iter().any(|f| f.line_info().is_some())
     }
 }
 
