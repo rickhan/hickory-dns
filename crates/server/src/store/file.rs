@@ -112,6 +112,11 @@ impl FileZoneHandler {
             )?,
         })
     }
+
+    /// Get the zone id
+    pub fn zone_id(&self) -> u64 {
+        self.in_memory.id()
+    }
 }
 
 impl Deref for FileZoneHandler {
@@ -144,7 +149,6 @@ impl ZoneHandler for FileZoneHandler {
     fn origin(&self) -> &LowerName {
         self.in_memory.origin()
     }
-
     /// Looks up all Resource Records matching the given `Name` and `RecordType`.
     ///
     /// # Arguments
