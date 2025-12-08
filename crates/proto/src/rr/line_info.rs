@@ -10,7 +10,18 @@
 use std::string::String;
 
 /// TODO: add documents
-#[derive(Default, PartialEq, Eq, Debug, Hash, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Hash,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct LineInfo {
     /// country info, optional
     pub country: Option<String>,
