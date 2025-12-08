@@ -9,6 +9,7 @@
 
 use alloc::{borrow::ToOwned, boxed::Box};
 use core::{cmp::Ordering, convert::TryFrom, fmt};
+use std::vec::Vec;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::dnssec::{Proof, Proven};
 use crate::{
     error::{ProtoError, ProtoResult},
-    rr::{Name, RData, RecordData, RecordType, dns_class::DNSClass},
+    rr::{LineInfo, Name, RData, RecordData, RecordType, dns_class::DNSClass},
     serialize::binary::{
         BinDecodable, BinDecoder, BinEncodable, BinEncoder, DecodeError, Restrict,
     },
@@ -81,6 +82,7 @@ pub struct Record<R: RecordData = RData> {
     mdns_cache_flush: bool,
     #[cfg(feature = "__dnssec")]
     proof: Proof,
+    lines: Option<Vec<LineInfo>>,
 }
 
 impl Record {
@@ -95,6 +97,7 @@ impl Record {
             mdns_cache_flush: false,
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
+            lines: None,
         }
     }
 }
@@ -111,6 +114,7 @@ impl Record {
             mdns_cache_flush: false,
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
+            lines: None,
         }
     }
 
@@ -141,6 +145,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush: false,
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
+            lines: None,
         }
     }
 
@@ -155,6 +160,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
+            lines,
         } = self;
 
         Some(Record {
@@ -166,6 +172,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
+            lines,
         })
     }
 
@@ -180,6 +187,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
+            lines,
         } = self;
 
         let rdata: RData = RecordData::into_rdata(rdata);
@@ -193,6 +201,7 @@ impl<R: RecordData> Record<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
+            lines,
         }
     }
 
@@ -250,6 +259,12 @@ impl<R: RecordData> Record<R> {
     #[cfg(feature = "__dnssec")]
     pub fn set_proof(&mut self, proof: Proof) -> &mut Self {
         self.proof = proof;
+        self
+    }
+
+    /// Set the Lines information for this record
+    pub fn set_lines(&mut self, lines: Option<Vec<LineInfo>>) -> &mut Self {
+        self.lines = lines;
         self
     }
 
@@ -316,6 +331,12 @@ impl<R: RecordData> Record<R> {
     pub fn proof(&self) -> Proof {
         self.proof
     }
+
+    /// The Lines information of this record
+    #[inline]
+    pub fn lines(&self) -> &Option<Vec<LineInfo>> {
+        &self.lines
+    }
 }
 
 /// Consumes `Record` giving public access to fields of `Record` so they can
@@ -335,6 +356,8 @@ pub struct RecordParts<R: RecordData = RData> {
     /// mDNS cache flush
     #[cfg(feature = "__dnssec")]
     pub proof: Proof,
+    /// lines info
+    pub lines: Option<Vec<LineInfo>>,
 }
 
 impl<R: RecordData> From<Record<R>> for RecordParts<R> {
@@ -348,6 +371,7 @@ impl<R: RecordData> From<Record<R>> for RecordParts<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
+            lines,
         } = record;
 
         Self {
@@ -359,6 +383,7 @@ impl<R: RecordData> From<Record<R>> for RecordParts<R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
+            lines,
         }
     }
 }
@@ -492,6 +517,7 @@ impl<'r> BinDecodable<'r> for Record<RData> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
+            lines: None,
         })
     }
 }
@@ -715,6 +741,7 @@ impl<R: RecordData> RecordRef<'_, R> {
             mdns_cache_flush: self.mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof: self.proof,
+            lines: None,
         }
     }
 
@@ -777,6 +804,7 @@ impl<'a, R: RecordData> TryFrom<&'a Record> for RecordRef<'a, R> {
             mdns_cache_flush,
             #[cfg(feature = "__dnssec")]
             proof,
+            lines,
         } = record;
 
         match R::try_borrow(rdata) {

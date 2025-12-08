@@ -10,6 +10,7 @@
 pub mod dns_class;
 // TODO: rename to sec
 pub mod domain;
+pub mod line_info;
 mod lower_name;
 pub mod rdata;
 pub mod record_data;
@@ -35,6 +36,7 @@ pub(crate) use self::record_type_set::RecordTypeSet;
 pub use self::resource::Record;
 pub use self::rr_set::RecordSet;
 pub use self::rr_set::RrsetRecords;
+pub use line_info::LineInfo;
 pub use lower_name::LowerName;
 pub use rr_key::RrKey;
 pub use serial_number::SerialNumber;

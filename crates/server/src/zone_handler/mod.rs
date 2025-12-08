@@ -11,6 +11,7 @@ use std::{fmt, io, sync::Arc};
 
 use cfg_if::cfg_if;
 use enum_as_inner::EnumAsInner;
+use hickory_proto::rr::LineInfo;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -44,6 +45,12 @@ pub use self::auth_lookup::{
 pub use self::catalog::Catalog;
 pub use self::message_request::{MessageRequest, Queries, UpdateRequest};
 pub use self::message_response::{MessageResponse, MessageResponseBuilder};
+
+/// Trait for find ip location info
+pub trait IpLocationInfo {
+    /// find ip location info
+    fn find_ip(&self, ip: &str) -> Option<LineInfo>;
+}
 
 /// ZoneHandler implementations can be used with a `Catalog`
 #[async_trait::async_trait]

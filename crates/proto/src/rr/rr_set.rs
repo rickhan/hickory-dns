@@ -8,9 +8,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::{iter::Chain, slice::Iter};
+use std::string::String;
 use tracing::{info, warn};
 
-use crate::rr::{DNSClass, Name, RData, Record, RecordType};
+use crate::rr::{DNSClass, LineInfo, Name, RData, Record, RecordType};
 
 /// Set of resource records associated to a name and type
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -216,6 +217,13 @@ impl RecordSet {
         self.insert(record, 0)
     }
 
+    /// creates a new Record as part of this RecordSet, adding the associated RData and lines
+    pub fn add_rdata_line(&mut self, rdata: RData, lines: Option<Vec<LineInfo>>) -> bool {
+        debug_assert_eq!(self.record_type, rdata.record_type());
+        let mut record = Record::from_rdata(self.name.clone(), self.ttl, rdata);
+        record.set_lines(lines);
+        self.insert(record, 0)
+    }
     /// Inserts a new Resource Record into the Set.
     ///
     /// If the record is inserted, the ttl for the most recent record will be used for the ttl of
@@ -411,6 +419,11 @@ impl RecordSet {
     /// Consumes `RecordSet` and returns its components
     pub fn into_parts(self) -> RecordSetParts {
         self.into()
+    }
+
+    /// Has line info for this record set
+    pub fn has_line_info(&self) -> bool {
+        self.records.iter().any(|f| f.lines().is_some())
     }
 }
 

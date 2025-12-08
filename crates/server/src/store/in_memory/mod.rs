@@ -65,6 +65,7 @@ pub struct InMemoryZoneHandler<P = TokioRuntimeProvider> {
     #[cfg(feature = "__dnssec")]
     nx_proof_kind: Option<NxProofKind>,
     _phantom: PhantomData<P>,
+    zone_id: u64,
 }
 
 impl<P: RuntimeProvider + Send + Sync> InMemoryZoneHandler<P> {
@@ -83,6 +84,7 @@ impl<P: RuntimeProvider + Send + Sync> InMemoryZoneHandler<P> {
     ///
     /// The new `ZoneHandler`.
     pub fn new(
+        zone_id: u64,
         origin: Name,
         records: BTreeMap<RrKey, RecordSet>,
         zone_type: ZoneType,
@@ -90,6 +92,7 @@ impl<P: RuntimeProvider + Send + Sync> InMemoryZoneHandler<P> {
         #[cfg(feature = "__dnssec")] nx_proof_kind: Option<NxProofKind>,
     ) -> Result<Self, String> {
         let mut this = Self::empty(
+            zone_id,
             origin.clone(),
             zone_type,
             axfr_policy,
@@ -131,12 +134,14 @@ impl<P: RuntimeProvider + Send + Sync> InMemoryZoneHandler<P> {
     ///
     /// This is an invalid zone, SOA must be added
     pub fn empty(
+        zone_id: u64,
         origin: Name,
         zone_type: ZoneType,
         axfr_policy: AxfrPolicy,
         #[cfg(feature = "__dnssec")] nx_proof_kind: Option<NxProofKind>,
     ) -> Self {
         Self {
+            zone_id,
             origin: LowerName::new(&origin),
             class: DNSClass::IN,
             zone_type,
@@ -164,6 +169,11 @@ impl<P: RuntimeProvider + Send + Sync> InMemoryZoneHandler<P> {
     /// Clears all records (including SOA, etc)
     pub fn clear(&mut self) {
         self.inner.get_mut().records.clear()
+    }
+
+    /// Get ZoneID
+    pub fn id(&self) -> u64 {
+        self.zone_id
     }
 
     /// Retrieve the Signer, which contains the private keys, for this zone

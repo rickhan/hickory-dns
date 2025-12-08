@@ -74,8 +74,14 @@ impl FileZoneHandler {
         }
     }
 
+    /// Creates a new ZoneHandler in block mode
+    pub fn block_new(in_memory: InMemoryZoneHandler) -> Self {
+        Self { in_memory }
+    }
+
     /// Read the ZoneHandler for the origin from the specified configuration
     pub fn try_from_config(
+        zone_id: u64,
         origin: Name,
         zone_type: ZoneType,
         axfr_policy: AxfrPolicy,
@@ -96,6 +102,7 @@ impl FileZoneHandler {
                 new
             },
             in_memory: InMemoryZoneHandler::new(
+                zone_id,
                 origin,
                 records,
                 zone_type,
@@ -296,6 +303,7 @@ mod tests {
             zone_path: PathBuf::from("../../tests/test-data/test_configs/example.com.zone"),
         };
         let handler = FileZoneHandler::try_from_config(
+            0,
             Name::from_str("example.com.").unwrap(),
             ZoneType::Primary,
             AxfrPolicy::Deny,

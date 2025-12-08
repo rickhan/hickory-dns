@@ -117,6 +117,7 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
 
     /// load the zone handler from the configuration
     pub async fn try_from_config(
+        zone_id: u64,
         origin: Name,
         zone_type: ZoneType,
         axfr_policy: AxfrPolicy,
@@ -139,6 +140,7 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                 .map_err(|e| format!("error opening journal: {journal_path:?}: {e}"))?;
 
             let in_memory = InMemoryZoneHandler::empty(
+                zone_id,
                 zone_name.clone(),
                 zone_type,
                 AxfrPolicy::AllowAll, // We apply our own AXFR policy before invoking the InMemoryZoneHandler.
@@ -164,6 +166,7 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                 .map_err(|e| format!("failed to load zone file: {e}"))?;
 
             let in_memory = InMemoryZoneHandler::new(
+                zone_id,
                 zone_name.clone(),
                 records,
                 zone_type,
