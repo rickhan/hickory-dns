@@ -427,7 +427,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
                     if let Some(client_info) = client_info {
                         let new_record_sets = record_sets
                             .into_iter()
-                            .map(|r| filter_by_line(rrset, &client_info))
+                            .map(|r| filter_by_line(r, &client_info))
                             .filter(|f| !f.is_empty())
                             .collect::<Vec<Arc<RecordSet>>>();
                         (new_record_sets, record_type)
@@ -854,13 +854,13 @@ fn filter_recordset_by_location(
     let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
 
     for r in rrset.records_without_rrsigs() {
-        if let Some(meta_loc) = r.location() {
-            if location_match(client_loc, meta_loc) {
-                new.add_record(r.clone());
+        if let Some(meta_loc) = r.line_info() {
+            if location_match(&client_loc, meta_loc) {
+                new.add_rdata(r.data().clone());
             }
         } else {
             // 没有设置位置的记录默认返回
-            new.add_record(r.clone());
+            new.add_rdata(r.data().clone());
         }
     }
 
@@ -872,13 +872,13 @@ fn filter_by_line(rrset: Arc<RecordSet>, client_loc: &LineInfo) -> Arc<RecordSet
     let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
 
     for r in rrset.records_without_rrsigs() {
-        if let Some(meta_loc) = r.location() {
+        if let Some(meta_loc) = r.line_info() {
             if location_match(client_loc, meta_loc) {
-                new.add_record(r.clone());
+                new.add_rdata(r.data().clone());
             }
         } else {
             // 没有设置位置的记录默认返回
-            new.add_record(r.clone());
+            new.add_rdata(r.data().clone());
         }
     }
 

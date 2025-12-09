@@ -10,7 +10,6 @@
 use std::{fmt, io, sync::Arc};
 
 use cfg_if::cfg_if;
-use enum_as_inner::EnumAsInner;
 use hickory_proto::rr::LineInfo;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
