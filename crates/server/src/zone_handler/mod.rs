@@ -51,6 +51,8 @@ pub trait IpLocationInfo: Send + Sync {
     fn find_ip(&self, ip: &str) -> Option<LineInfo>;
 }
 
+/// Fake Location Info，no location will be returned
+#[derive(Debug,Copy,Clone)]
 pub struct FakeLocationInfo;
 
 impl IpLocationInfo for FakeLocationInfo {
