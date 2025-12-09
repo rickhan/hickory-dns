@@ -402,13 +402,12 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
             query_type = inner.replace_any(name);
         }
 
-        let remote_addr = if let Some(r) = request_info {
-            r.src.ip()
+        let client_ip = if let Some(r) = request_info {
+            r.src.ip().to_string()
         } else {
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            "0.0.0.0".to_string()
         };
 
-        let client_ip = remote_addr.to_string();
         let answer = inner
             .inner_lookup(name, query_type, lookup_options)
             .map(|rrset| filter_recordset_by_location(rrset, &client_ip, ip_loc));
