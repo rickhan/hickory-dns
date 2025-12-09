@@ -39,7 +39,7 @@ use crate::{
 use crate::{
     proto::{
         op::{ResponseCode, ResponseSigner},
-        rr::{DNSClass, LowerName, Name, RData, Record, RecordSet, RecordType, RrKey},
+        rr::{DNSClass, LineInfo, LowerName, Name, RData, Record, RecordSet, RecordType, RrKey},
         runtime::{RuntimeProvider, TokioRuntimeProvider},
         serialize::txt::Parser,
     },
@@ -408,7 +408,10 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
             IpAddr::V4(Ipv4Addr::UNSPECIFIED)
         };
 
-        let answer = inner.inner_lookup(name, query_type, lookup_options);
+        let client_ip = remote_addr.to_string();
+        let answer = inner
+            .inner_lookup(name, query_type, lookup_options)
+            .map(|rrset| filter_recordset_by_location(rrset, &client_ip, ip_loc));
 
         // evaluate any cnames for additional inclusion
         let additionals_root_chain_type: Option<(_, _)> = answer
@@ -418,6 +421,23 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
                 inner
                     .additional_search(name, query_type, search_name, search_type, lookup_options)
                     .map(|adds| (adds, search_type))
+            })
+            .map(|(record_sets, record_type)| {
+                if record_sets.iter().any(|f| f.has_line_info()) {
+                    let client_info = ip_loc.find_ip(&client_ip);
+                    if let Some(client_info) = client_info {
+                        let new_record_sets = record_sets
+                            .into_iter()
+                            .map(|r| filter_by_line(rrset, &client_info))
+                            .filter(|f| !f.is_empty())
+                            .collect::<Vec<Arc<RecordSet>>>();
+                        (new_record_sets, record_type)
+                    } else {
+                        (record_sets, record_type)
+                    }
+                } else {
+                    (record_sets, record_type)
+                }
             });
 
         // if the chain started with an ANAME, take the A or AAAA record from the list
@@ -813,4 +833,71 @@ pub(crate) fn zone_from_path(
     info!("zone file loaded: {origin} with {} records", records.len());
     debug!("zone: {records:#?}");
     Ok(records)
+}
+
+/// 根据客户端的ip地址，筛选出合知的rdata
+#[inline]
+fn filter_recordset_by_location(
+    rrset: Arc<RecordSet>,
+    client_ip: &str,
+    ip_loc: &dyn IpLocationInfo,
+) -> Arc<RecordSet> {
+    if !rrset.has_line_info() {
+        return rrset;
+    }
+
+    let client_loc = ip_loc.find_ip(client_ip);
+    if client_loc.is_none() {
+        return rrset;
+    }
+    let client_loc = client_loc.unwrap();
+
+    let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
+
+    for r in rrset.records_without_rrsigs() {
+        if let Some(meta_loc) = r.location() {
+            if location_match(client_loc, meta_loc) {
+                new.add_record(r.clone());
+            }
+        } else {
+            // 没有设置位置的记录默认返回
+            new.add_record(r.clone());
+        }
+    }
+
+    Arc::new(new)
+}
+
+#[inline]
+fn filter_by_line(rrset: Arc<RecordSet>, client_loc: &LineInfo) -> Arc<RecordSet> {
+    let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
+
+    for r in rrset.records_without_rrsigs() {
+        if let Some(meta_loc) = r.location() {
+            if location_match(client_loc, meta_loc) {
+                new.add_record(r.clone());
+            }
+        } else {
+            // 没有设置位置的记录默认返回
+            new.add_record(r.clone());
+        }
+    }
+
+    Arc::new(new)
+}
+
+#[inline]
+fn location_match(client: &LineInfo, rule: &LineInfo) -> bool {
+    match_field(&client.country, &rule.country)
+        && match_field(&client.province, &rule.province)
+        && match_field(&client.city, &rule.city)
+        && match_field(&client.isp, &rule.isp)
+}
+
+#[inline]
+fn match_field(client: &Option<String>, rule: &Option<String>) -> bool {
+    match rule {
+        None => true,
+        Some(r) => client.as_ref() == Some(r),
+    }
 }
