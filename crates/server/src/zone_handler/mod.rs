@@ -392,7 +392,7 @@ impl<E: std::fmt::Display> LookupControlFlow<AuthLookup, E> {
 }
 
 /// A query could not be fulfilled
-#[derive(Debug, EnumAsInner, Error)]
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum LookupError {
     /// The query had an invalid number of queries

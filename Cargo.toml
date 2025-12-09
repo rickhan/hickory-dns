@@ -41,7 +41,7 @@ thiserror = { version = "2", default-features = false }
 hyper = "1.6.0"
 hyper-util = "0.1.11"
 metrics = { version = "0.24.1" }
-metrics-exporter-prometheus = { version = "0.17", default-features = false, features = ["http-listener"] }
+metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
 metrics-process = "2.4.0"
 # metrics tests
 metrics-util = { version = "0.20.0", default-features = false }
@@ -90,7 +90,6 @@ cfg-if = "1"
 clap = { version = "4.0", default-features = false }
 console = "0.16"
 data-encoding = { version = "2.2.0", default-features = false }
-enum-as-inner = "0.6"
 hex = "0.4"
 hostname = "0.4"
 idna = { version = "1.0.3", default-features = false, features = ["alloc", "compiled_data"] }
@@ -112,7 +111,7 @@ serde = "1.0"
 serde_json = "1"
 smallvec = "1.6"
 socket2 = "0.6"
-system-configuration = "0.6"
+system-configuration = "0.7"
 time = "0.3"
 tinyvec = "1.1.1"
 toml = "0.9"
