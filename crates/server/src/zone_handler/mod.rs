@@ -52,7 +52,7 @@ pub trait IpLocationInfo: Send + Sync {
 }
 
 /// Fake Location Info，no location will be returned
-#[derive(Debug,Copy,Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct FakeLocationInfo;
 
 impl IpLocationInfo for FakeLocationInfo {
