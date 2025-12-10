@@ -424,16 +424,13 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
             .map(|(record_sets, record_type)| {
                 if record_sets.iter().any(|f| f.has_line_info()) {
                     let client_info = ip_loc.find_ip(&client_ip);
-                    if let Some(client_info) = client_info {
-                        let new_record_sets = record_sets
-                            .into_iter()
-                            .map(|r| filter_by_line(r, &client_info))
-                            .filter(|f| !f.is_empty())
-                            .collect::<Vec<Arc<RecordSet>>>();
-                        (new_record_sets, record_type)
-                    } else {
-                        (record_sets, record_type)
-                    }
+
+                    let new_record_sets = record_sets
+                        .into_iter()
+                        .map(|r| filter_by_line(r, &client_info))
+                        .filter(|f| !f.is_empty())
+                        .collect::<Vec<Arc<RecordSet>>>();
+                    (new_record_sets, record_type)
                 } else {
                     (record_sets, record_type)
                 }
@@ -845,9 +842,17 @@ fn filter_recordset_by_location(
         return rrset;
     }
 
+    println!("has line info");
     let client_loc = ip_loc.find_ip(client_ip);
     if client_loc.is_none() {
-        return rrset;
+        // only default
+        let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
+        for r in rrset.records_without_rrsigs() {
+            if r.line_info().is_none() {
+                new.add_rdata(r.data().clone());
+            }
+        }
+        return Arc::new(new);
     }
     let client_loc = client_loc.unwrap();
 
@@ -858,6 +863,7 @@ fn filter_recordset_by_location(
         if let Some(meta_loc) = r.line_info() {
             if location_match(&client_loc, meta_loc) {
                 new.add_rdata(r.data().clone());
+                println!("line matched! rule:{:?} client: {:?}", meta_loc, client_loc);
             }
         }
     }
@@ -876,13 +882,14 @@ fn filter_recordset_by_location(
 }
 
 #[inline]
-fn filter_by_line(rrset: Arc<RecordSet>, client_loc: &LineInfo) -> Arc<RecordSet> {
+fn filter_by_line(rrset: Arc<RecordSet>, client_loc: &Option<LineInfo>) -> Arc<RecordSet> {
     let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
-
-    for r in rrset.records_without_rrsigs() {
-        if let Some(meta_loc) = r.line_info() {
-            if location_match(client_loc, meta_loc) {
-                new.add_rdata(r.data().clone());
+    if let Some(client_loc) = client_loc {
+        for r in rrset.records_without_rrsigs() {
+            if let Some(meta_loc) = r.line_info() {
+                if location_match(client_loc, meta_loc) {
+                    new.add_rdata(r.data().clone());
+                }
             }
         }
     }
