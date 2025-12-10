@@ -425,39 +425,39 @@ impl InnerInMemory {
             false
         }
 
-        /// returns true if an only if the label can not co-occupy space with the checked type
-        fn label_does_not_allow_multiple(
-            upsert_type: RecordType,
-            occupied_type: RecordType,
-            check_type: RecordType,
-        ) -> bool {
-            // it's a CNAME/ANAME but there's a record that's not a CNAME/ANAME at this location
-            (upsert_type == check_type && occupied_type != check_type) ||
-                // it's a different record, but there is already a CNAME/ANAME here
-                (upsert_type != check_type && occupied_type == check_type)
-        }
+        // returns true if an only if the label can not co-occupy space with the checked type
+        // fn label_does_not_allow_multiple(
+        //     upsert_type: RecordType,
+        //     occupied_type: RecordType,
+        //     check_type: RecordType,
+        // ) -> bool {
+        //     // it's a CNAME/ANAME but there's a record that's not a CNAME/ANAME at this location
+        //     (upsert_type == check_type && occupied_type != check_type) ||
+        //         // it's a different record, but there is already a CNAME/ANAME here
+        //         (upsert_type != check_type && occupied_type == check_type)
+        // }
 
         // check that CNAME and ANAME is either not already present, or no other records are if it's a CNAME
         let start_range_key = RrKey::new(record.name().into(), RecordType::Unknown(u16::MIN));
         let end_range_key = RrKey::new(record.name().into(), RecordType::Unknown(u16::MAX));
 
-        // let multiple_records_at_label_disallowed = self
-        //     .records
-        //     .range(&start_range_key..&end_range_key)
-        //     // remember CNAME can be the only record at a particular label
-        //     .any(|(key, _)| {
-        //         !is_nsec(record.record_type(), key.record_type)
-        //             && label_does_not_allow_multiple(
-        //                 record.record_type(),
-        //                 key.record_type,
-        //                 RecordType::CNAME,
-        //             )
-        //     });
+        let multiple_records_at_label_disallowed = self
+            .records
+            .range(&start_range_key..&end_range_key)
+            // remember CNAME can be the only record at a particular label
+            .any(|(key, _)| {
+                !is_nsec(record.record_type(), key.record_type)
+                    // && label_does_not_allow_multiple(
+                    //     record.record_type(),
+                    //     key.record_type,
+                    //     RecordType::CNAME,
+                    // )
+            });
 
-        // if multiple_records_at_label_disallowed {
-        //     // consider making this an error?
-        //     return false;
-        // }
+        if multiple_records_at_label_disallowed {
+            // consider making this an error?
+            return false;
+        }
 
         let rr_key = RrKey::new(record.name().into(), record.record_type());
         let records: &mut Arc<RecordSet> = self.records.entry(rr_key).or_insert_with(|| {
