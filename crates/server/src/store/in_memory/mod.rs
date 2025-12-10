@@ -842,8 +842,8 @@ fn filter_recordset_by_location(
         return rrset;
     }
 
-    println!("has line info");
     let client_loc = ip_loc.find_ip(client_ip);
+    println!("has line info client_loc = {:?}", client_loc);
     if client_loc.is_none() {
         // only default
         let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
