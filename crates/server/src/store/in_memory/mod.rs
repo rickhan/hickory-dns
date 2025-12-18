@@ -11,7 +11,6 @@ use std::{
     collections::BTreeMap,
     fs,
     marker::PhantomData,
-    net::{IpAddr, Ipv4Addr},
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
@@ -39,7 +38,6 @@ use crate::{
     proto::{
         op::{ResponseCode, ResponseSigner},
         rr::{DNSClass, LineInfo, LowerName, Name, RData, Record, RecordSet, RecordType, RrKey},
-        runtime::{RuntimeProvider, TokioRuntimeProvider},
         serialize::txt::Parser,
     },
     server::{Request, RequestInfo},
