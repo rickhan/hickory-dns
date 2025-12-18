@@ -18,15 +18,16 @@ use futures::{
     stream::{Stream, once},
 };
 
+use hickory_net::NetError;
+use hickory_net::runtime::TokioTime;
+use hickory_net::runtime::{RuntimeProvider, TokioHandle};
+use hickory_net::tcp::DnsTcpStream;
+use hickory_net::udp::DnsUdpSocket;
+use hickory_net::xfer::DnsHandle;
+use hickory_proto::ProtoError;
 use hickory_proto::op::{DnsRequest, DnsResponse, Message, Query};
 use hickory_proto::rr::rdata::{CNAME, NS, SOA};
 use hickory_proto::rr::{Name, RData, Record};
-use hickory_proto::runtime::TokioTime;
-use hickory_proto::runtime::{RuntimeProvider, TokioHandle};
-use hickory_proto::tcp::DnsTcpStream;
-use hickory_proto::udp::DnsUdpSocket;
-use hickory_proto::xfer::DnsHandle;
-use hickory_proto::{NetError, ProtoError};
 use hickory_resolver::config::ConnectionConfig;
 use hickory_resolver::{ConnectionProvider, PoolContext};
 
@@ -37,7 +38,7 @@ impl AsyncRead for TcpPlaceholder {
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         buf: &mut [u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<io::Result<usize>> {
         Poll::Ready(Ok(buf.len()))
     }
 }
@@ -47,15 +48,15 @@ impl AsyncWrite for TcpPlaceholder {
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<io::Result<usize>> {
         Poll::Ready(Ok(buf.len()))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 }
@@ -73,7 +74,7 @@ impl DnsUdpSocket for UdpPlaceholder {
         &self,
         _cx: &mut Context<'_>,
         buf: &mut [u8],
-    ) -> Poll<std::io::Result<(usize, SocketAddr)>> {
+    ) -> Poll<io::Result<(usize, SocketAddr)>> {
         Poll::Ready(Ok((
             buf.len(),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 77)), 1),
@@ -85,7 +86,7 @@ impl DnsUdpSocket for UdpPlaceholder {
         _cx: &mut Context<'_>,
         buf: &[u8],
         _target: SocketAddr,
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<io::Result<usize>> {
         Poll::Ready(Ok(buf.len()))
     }
 }
@@ -108,7 +109,7 @@ impl RuntimeProvider for MockRuntimeProvider {
         _server_addr: SocketAddr,
         _bind_addr: Option<SocketAddr>,
         _wait_for: Option<std::time::Duration>,
-    ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Tcp>>>> {
+    ) -> Pin<Box<dyn Send + Future<Output = Result<Self::Tcp, NetError>>>> {
         Box::pin(async { Ok(TcpPlaceholder) })
     }
 
@@ -116,7 +117,7 @@ impl RuntimeProvider for MockRuntimeProvider {
         &self,
         _local_addr: SocketAddr,
         _server_addr: SocketAddr,
-    ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Udp>>>> {
+    ) -> Pin<Box<dyn Send + Future<Output = Result<Self::Udp, NetError>>>> {
         Box::pin(async { Ok(UdpPlaceholder) })
     }
 }
@@ -136,7 +137,7 @@ impl<O: OnSend + Unpin> ConnectionProvider for MockConnProvider<O> {
         _: IpAddr,
         _config: &ConnectionConfig,
         _cx: &PoolContext,
-    ) -> Result<Self::FutureConn, io::Error> {
+    ) -> Result<Self::FutureConn, NetError> {
         println!("MockConnProvider::new_connection");
         Ok(Box::pin(future::ok(MockClientHandle::mock_on_send(
             vec![],
@@ -161,7 +162,7 @@ impl MockClientHandle<DefaultOnSend> {
     pub fn mock(messages: Vec<Result<DnsResponse, NetError>>) -> Self {
         println!("MockClientHandle::mock message count: {}", messages.len());
 
-        MockClientHandle {
+        Self {
             messages: Arc::new(Mutex::new(messages)),
             on_send: DefaultOnSend,
         }
@@ -177,7 +178,7 @@ impl<O: OnSend> MockClientHandle<O> {
             messages.len()
         );
 
-        MockClientHandle {
+        Self {
             messages: Arc::new(Mutex::new(messages)),
             on_send,
         }
@@ -211,7 +212,7 @@ pub fn v4_record(name: Name, ip: Ipv4Addr) -> Record {
 }
 
 pub fn soa_record(name: Name, mname: Name) -> Record {
-    let soa = SOA::new(mname, Default::default(), 1, 3600, 60, 86400, 3600);
+    let soa = SOA::new(mname, Name::default(), 1, 3600, 60, 86400, 3600);
     Record::from_rdata(name, 86400, RData::SOA(soa))
 }
 

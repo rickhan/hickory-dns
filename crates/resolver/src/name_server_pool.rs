@@ -30,24 +30,26 @@ use tracing::{debug, error, info};
 
 #[cfg(any(feature = "__tls", feature = "__quic"))]
 use crate::config::OpportunisticEncryptionConfig;
-use crate::config::{
-    NameServerConfig, OpportunisticEncryption, ResolverOpts, ServerOrderingStrategy,
-};
-use crate::connection_provider::{ConnectionProvider, TlsConfig};
-use crate::name_server::{ConnectionPolicy, NameServer};
-use crate::proto::{
-    DnsError, NetError, NetErrorKind, NoRecords,
-    access_control::AccessControlSet,
-    op::{DnsRequest, DnsRequestOptions, DnsResponse, OpCode, Query, ResponseCode},
-    rr::{
-        Name, RData, Record,
-        rdata::{
-            A, AAAA,
-            opt::{ClientSubnet, EdnsCode, EdnsOption},
+use crate::{
+    config::{NameServerConfig, OpportunisticEncryption, ResolverOpts, ServerOrderingStrategy},
+    connection_provider::{ConnectionProvider, TlsConfig},
+    name_server::{ConnectionPolicy, NameServer},
+    net::{
+        DnsError, NetError, NoRecords,
+        runtime::{RuntimeProvider, Time},
+        xfer::{DnsHandle, Protocol},
+    },
+    proto::{
+        access_control::AccessControlSet,
+        op::{DnsRequest, DnsRequestOptions, DnsResponse, OpCode, Query, ResponseCode},
+        rr::{
+            Name, RData, Record,
+            rdata::{
+                A, AAAA,
+                opt::{ClientSubnet, EdnsCode, EdnsOption},
+            },
         },
     },
-    runtime::{RuntimeProvider, Time},
-    xfer::{DnsHandle, Protocol},
 };
 
 /// Abstract interface for mocking purpose
@@ -57,57 +59,6 @@ pub struct NameServerPool<P: ConnectionProvider> {
     active_requests: Arc<Mutex<HashMap<Arc<CacheKey>, SharedLookup>>>,
     ttl: Option<TtlInstant>,
     zone: Option<Name>,
-}
-
-#[derive(Clone)]
-pub(crate) struct SharedLookup(Shared<BoxFuture<'static, Option<Result<DnsResponse, NetError>>>>);
-
-impl Future for SharedLookup {
-    type Output = Result<DnsResponse, NetError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.0.poll_unpin(cx).map(|o| match o {
-            Some(r) => r,
-            None => Err("no response from nameserver".into()),
-        })
-    }
-}
-
-/// Fields of a [`DnsRequest`] that are used as a key when memoizing queries.
-#[derive(PartialEq, Eq, Hash)]
-struct CacheKey {
-    op_code: OpCode,
-    recursion_desired: bool,
-    checking_disabled: bool,
-    queries: Vec<Query>,
-    dnssec_ok: bool,
-    client_subnet: Option<ClientSubnet>,
-}
-
-impl CacheKey {
-    fn from_request(request: &DnsRequest) -> Self {
-        let dnssec_ok;
-        let client_subnet;
-        if let Some(edns) = request.extensions() {
-            dnssec_ok = edns.flags().dnssec_ok;
-            if let Some(EdnsOption::Subnet(subnet)) = edns.option(EdnsCode::Subnet) {
-                client_subnet = Some(*subnet);
-            } else {
-                client_subnet = None;
-            }
-        } else {
-            dnssec_ok = false;
-            client_subnet = None;
-        }
-        Self {
-            op_code: request.op_code(),
-            recursion_desired: request.recursion_desired(),
-            checking_disabled: request.checking_disabled(),
-            queries: request.queries().to_vec(),
-            dnssec_ok,
-            client_subnet,
-        }
-    }
 }
 
 impl<P: ConnectionProvider> NameServerPool<P> {
@@ -329,7 +280,7 @@ impl<P: ConnectionProvider> PoolState<P> {
         let mut servers = VecDeque::from(servers);
         let mut backoff = Duration::from_millis(20);
         let mut busy = SmallVec::<[Arc<NameServer<P>>; 2]>::new();
-        let mut err = NetError::from(NetErrorKind::NoConnections);
+        let mut err = NetError::NoConnections;
         let mut policy = ConnectionPolicy::default();
 
         loop {
@@ -386,21 +337,21 @@ impl<P: ConnectionProvider> PoolState<P> {
                     Err(e) => e,
                 };
 
-                match &e.kind {
+                match &e {
                     // We assume the response is spoofed, so ignore it and avoid UDP server for this
                     // request to try and avoid further spoofing.
-                    NetErrorKind::QueryCaseMismatch => {
+                    NetError::QueryCaseMismatch => {
                         servers.push_front(server);
                         policy.disable_udp = true;
                         continue;
                     }
                     // If the server is busy, try it again later if necessary.
-                    NetErrorKind::Busy => busy.push(server),
+                    NetError::Busy => busy.push(server),
                     // If the connection failed, try another one.
-                    NetErrorKind::Io(_) | NetErrorKind::NoConnections => {}
+                    NetError::Io(_) | NetError::NoConnections => {}
                     // If we got an `NXDomain` response from a server whose negative responses we
                     // don't trust, we should try another server.
-                    NetErrorKind::Dns(DnsError::NoRecordsFound(NoRecords {
+                    NetError::Dns(DnsError::NoRecordsFound(NoRecords {
                         response_code: ResponseCode::NXDomain,
                         ..
                     })) if !server.trust_negative_responses() => {}
@@ -415,36 +366,27 @@ impl<P: ConnectionProvider> PoolState<P> {
 
 /// Compare two errors to see if one contains a server response.
 fn most_specific(previous: NetError, current: NetError) -> NetError {
-    let prev_dns = match &previous.kind {
-        NetErrorKind::Dns(dns) => Some(dns),
-        _ => None,
-    };
-
-    let cur_dns = match &current.kind {
-        NetErrorKind::Dns(dns) => Some(dns),
-        _ => None,
-    };
-
-    match (prev_dns, cur_dns) {
-        (Some(DnsError::NoRecordsFound { .. }), Some(DnsError::NoRecordsFound { .. })) => {
-            return previous;
-        }
-        (Some(DnsError::NoRecordsFound { .. }), _) => return previous,
-        (_, Some(DnsError::NoRecordsFound { .. })) => return current,
+    match (&previous, &current) {
+        (
+            NetError::Dns(DnsError::NoRecordsFound { .. }),
+            NetError::Dns(DnsError::NoRecordsFound { .. }),
+        ) => return previous,
+        (NetError::Dns(DnsError::NoRecordsFound { .. }), _) => return previous,
+        (_, NetError::Dns(DnsError::NoRecordsFound { .. })) => return current,
         _ => (),
     }
 
-    match (&previous.kind, &current.kind) {
-        (NetErrorKind::Io { .. }, NetErrorKind::Io { .. }) => return previous,
-        (NetErrorKind::Io { .. }, _) => return current,
-        (_, NetErrorKind::Io { .. }) => return previous,
+    match (&previous, &current) {
+        (NetError::Io { .. }, NetError::Io { .. }) => return previous,
+        (NetError::Io { .. }, _) => return current,
+        (_, NetError::Io { .. }) => return previous,
         _ => (),
     }
 
-    match (&previous.kind, &current.kind) {
-        (NetErrorKind::Timeout, NetErrorKind::Timeout) => return previous,
-        (NetErrorKind::Timeout, _) => return previous,
-        (_, NetErrorKind::Timeout) => return current,
+    match (&previous, &current) {
+        (NetError::Timeout, NetError::Timeout) => return previous,
+        (NetError::Timeout, _) => return previous,
+        (_, NetError::Timeout) => return current,
         _ => (),
     }
 
@@ -557,8 +499,8 @@ impl NameServerTransportState {
     /// Update the transport state for the given IP and protocol to record a received error.
     pub(crate) fn error_received(&mut self, ip: IpAddr, protocol: Protocol, error: &NetError) {
         let protocol_state = self.0.entry(ip).or_default();
-        *protocol_state.get_mut(protocol) = match &error.kind {
-            NetErrorKind::Timeout => TransportState::TimedOut {
+        *protocol_state.get_mut(protocol) = match &error {
+            NetError::Timeout => TransportState::TimedOut {
                 #[cfg(any(feature = "__tls", feature = "__quic"))]
                 completed_at: SystemTime::now(),
             },
@@ -783,7 +725,7 @@ mod opportunistic_encryption_persistence {
 
     use super::*;
     use crate::config::OpportunisticEncryptionPersistence;
-    use crate::proto::runtime::Spawn;
+    use crate::net::runtime::Spawn;
 
     /// A background task for periodically saving opportunistic encryption state.
     pub struct OpportunisticEncryptionStatePersistTask<T> {
@@ -909,6 +851,57 @@ mod opportunistic_encryption_persistence {
     }
 }
 
+/// Fields of a [`DnsRequest`] that are used as a key when memoizing queries.
+#[derive(PartialEq, Eq, Hash)]
+struct CacheKey {
+    op_code: OpCode,
+    recursion_desired: bool,
+    checking_disabled: bool,
+    queries: Vec<Query>,
+    dnssec_ok: bool,
+    client_subnet: Option<ClientSubnet>,
+}
+
+impl CacheKey {
+    fn from_request(request: &DnsRequest) -> Self {
+        let dnssec_ok;
+        let client_subnet;
+        if let Some(edns) = request.extensions() {
+            dnssec_ok = edns.flags().dnssec_ok;
+            if let Some(EdnsOption::Subnet(subnet)) = edns.option(EdnsCode::Subnet) {
+                client_subnet = Some(*subnet);
+            } else {
+                client_subnet = None;
+            }
+        } else {
+            dnssec_ok = false;
+            client_subnet = None;
+        }
+        Self {
+            op_code: request.op_code(),
+            recursion_desired: request.recursion_desired(),
+            checking_disabled: request.checking_disabled(),
+            queries: request.queries().to_vec(),
+            dnssec_ok,
+            client_subnet,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SharedLookup(Shared<BoxFuture<'static, Option<Result<DnsResponse, NetError>>>>);
+
+impl Future for SharedLookup {
+    type Output = Result<DnsResponse, NetError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.poll_unpin(cx).map(|o| match o {
+            Some(r) => r,
+            None => Err("no response from nameserver".into()),
+        })
+    }
+}
+
 #[cfg(test)]
 #[cfg(feature = "tokio")]
 mod tests {
@@ -919,10 +912,10 @@ mod tests {
 
     use super::*;
     use crate::config::{NameServerConfig, ResolverConfig};
+    use crate::net::runtime::TokioRuntimeProvider;
+    use crate::net::xfer::{DnsHandle, FirstAnswer};
     use crate::proto::op::{DnsRequestOptions, Query};
     use crate::proto::rr::{Name, RecordType};
-    use crate::proto::runtime::TokioRuntimeProvider;
-    use crate::proto::xfer::{DnsHandle, FirstAnswer};
 
     #[ignore]
     // because of there is a real connection that needs a reasonable timeout

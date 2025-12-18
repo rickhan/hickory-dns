@@ -17,6 +17,8 @@
 //! Operations to send with a `Client` or server, e.g. `Query`, `Message`, or `UpdateMessage` can
 //! be used together to either query or update resource records sets.
 
+use core::time::Duration;
+
 mod dns_request;
 pub use dns_request::{DnsRequest, DnsRequestOptions};
 
@@ -27,7 +29,7 @@ mod edns;
 pub use edns::{Edns, EdnsFlags};
 
 mod header;
-pub use header::{Header, MessageType};
+pub use header::{Flags, Header, MessageType};
 
 mod lower_query;
 pub use lower_query::LowerQuery;
@@ -52,3 +54,9 @@ pub use serial_message::SerialMessage;
 
 pub mod update_message;
 pub use update_message::UpdateMessage;
+
+/// Default retry interval floor.  This value is somewhat arbitrary, but is based on
+/// observed, real-world latencies and offers the chance to send three queries in a
+/// second to maximize the chance of a successful response in periods of high packet
+/// loss without overwhelming upstream servers.
+pub const DEFAULT_RETRY_FLOOR: Duration = Duration::from_millis(333);

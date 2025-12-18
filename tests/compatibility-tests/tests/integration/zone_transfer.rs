@@ -13,12 +13,12 @@ use std::str::FromStr;
 use futures::TryStreamExt;
 use time::Duration;
 
-use hickory_compatibility::named_process;
-use hickory_proto::client::{Client, ClientHandle};
+use hickory_compatibility::NamedProcess;
+use hickory_net::client::{Client, ClientHandle};
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::tcp::TcpClientStream;
+use hickory_net::xfer::DnsMultiplexer;
 use hickory_proto::rr::{Name, RData, Record, RecordType, rdata::A};
-use hickory_proto::runtime::TokioRuntimeProvider;
-use hickory_proto::tcp::TcpClientStream;
-use hickory_proto::xfer::DnsMultiplexer;
 use test_support::subscribe;
 
 macro_rules! assert_serial {
@@ -36,7 +36,7 @@ macro_rules! assert_serial {
 async fn test_zone_transfer() {
     subscribe();
 
-    let (_process, port) = named_process();
+    let (_process, port) = NamedProcess::start();
     let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     let (stream, sender) =
         TcpClientStream::new(socket, None, None, TokioRuntimeProvider::default());
@@ -59,10 +59,8 @@ async fn test_zone_transfer() {
         2000 + 3
     );
 
-    let soa = if let RData::SOA(soa) = result[0].answers()[0].data() {
-        soa
-    } else {
-        panic!("First answer was not an SOA record")
+    let RData::SOA(soa) = result[0].answers()[0].data() else {
+        panic!("First answer was not an SOA record");
     };
 
     assert_eq!(result[0].answers()[0].record_type(), RecordType::SOA);

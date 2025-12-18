@@ -4,7 +4,7 @@
 use std::{
     fmt,
     future::poll_fn,
-    io, mem,
+    mem,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     pin::Pin,
     sync::{
@@ -23,21 +23,19 @@ use futures::{
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, Instant, Sleep};
 
-#[cfg(feature = "__dnssec")]
-use hickory_proto::client::DnssecClient;
-use hickory_proto::{
+use hickory_net::{
     BufDnsStreamHandle, NetError,
-    op::{DnsResponse, Message, SerialMessage},
-    rr::Record,
     runtime::TokioTime,
-    serialize::binary::{BinDecodable, BinDecoder, BinEncoder},
     xfer::{DnsClientStream, Protocol, StreamReceiver},
 };
 #[cfg(feature = "__dnssec")]
+use hickory_net::{client::DnssecClient, runtime::TokioRuntimeProvider, udp::UdpClientStream};
+#[cfg(feature = "__dnssec")]
+use hickory_proto::dnssec::{PublicKeyBuf, SigningKey, TrustAnchors, crypto::Ed25519SigningKey};
 use hickory_proto::{
-    dnssec::{PublicKeyBuf, SigningKey, TrustAnchors, crypto::Ed25519SigningKey},
-    runtime::TokioRuntimeProvider,
-    udp::UdpClientStream,
+    op::{DnsResponse, Message, SerialMessage},
+    rr::Record,
+    serialize::binary::{BinDecodable, BinDecoder, BinEncoder},
 };
 #[cfg(feature = "__dnssec")]
 use hickory_server::Server;
@@ -59,12 +57,12 @@ impl TestClientStream {
     pub fn new(
         catalog: Arc<Mutex<Catalog>>,
     ) -> (
-        BoxFuture<'static, Result<Self, io::Error>>,
+        BoxFuture<'static, Result<Self, NetError>>,
         BufDnsStreamHandle,
     ) {
         let (message_sender, outbound_messages) = BufDnsStreamHandle::new(([0, 0, 0, 0], 0).into());
 
-        let stream = Box::pin(future::ok(TestClientStream {
+        let stream = Box::pin(future::ok(Self {
             catalog,
             outbound_messages,
         }));
@@ -83,7 +81,7 @@ impl TestResponseHandler {
     pub fn new() -> Self {
         let buf = Arc::new(Mutex::new(Vec::with_capacity(512)));
         let message_ready = Arc::new(AtomicBool::new(false));
-        TestResponseHandler { message_ready, buf }
+        Self { message_ready, buf }
     }
 
     fn into_inner(self) -> impl Future<Output = Vec<u8>> {
@@ -120,20 +118,18 @@ impl ResponseHandler for TestResponseHandler {
             impl Iterator<Item = &'a Record> + Send + 'a,
             impl Iterator<Item = &'a Record> + Send + 'a,
         >,
-    ) -> io::Result<ResponseInfo> {
+    ) -> Result<ResponseInfo, NetError> {
         let buf = &mut self.buf.lock().unwrap();
         buf.clear();
         let mut encoder = BinEncoder::new(buf);
-        let info = response
-            .destructive_emit(&mut encoder)
-            .expect("could not encode");
+        let info = response.destructive_emit(&mut encoder)?;
         self.message_ready.store(true, Ordering::Release);
         Ok(info)
     }
 }
 
 impl fmt::Display for TestClientStream {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(formatter, "TestClientStream")
     }
 }
@@ -149,7 +145,7 @@ impl DnsClientStream for TestClientStream {
 impl Stream for TestClientStream {
     type Item = Result<SerialMessage, NetError>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         use futures::executor::block_on;
 
         match self.outbound_messages.next().poll_unpin(cx) {
@@ -183,7 +179,7 @@ impl Stream for TestClientStream {
 }
 
 impl fmt::Debug for TestClientStream {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TestClientStream catalog")
     }
 }
@@ -198,13 +194,13 @@ pub struct NeverReturnsClientStream {
 #[allow(dead_code)]
 impl NeverReturnsClientStream {
     pub fn new() -> (
-        BoxFuture<'static, Result<Self, io::Error>>,
+        BoxFuture<'static, Result<Self, NetError>>,
         BufDnsStreamHandle,
     ) {
         let (message_sender, outbound_messages) = BufDnsStreamHandle::new(([0, 0, 0, 0], 0).into());
 
         let stream = Box::pin(future::lazy(|_| {
-            Ok(NeverReturnsClientStream {
+            Ok(Self {
                 timeout: Box::pin(tokio::time::sleep(Duration::from_secs(1))),
                 outbound_messages,
             })
@@ -215,7 +211,7 @@ impl NeverReturnsClientStream {
 }
 
 impl fmt::Display for NeverReturnsClientStream {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(formatter, "NeverReturnsClientStream")
     }
 }
@@ -231,7 +227,7 @@ impl DnsClientStream for NeverReturnsClientStream {
 impl Stream for NeverReturnsClientStream {
     type Item = Result<SerialMessage, NetError>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // poll the timer forever...
         if self.timeout.poll_unpin(cx).is_pending() {
             return Poll::Pending;
@@ -249,7 +245,7 @@ impl Stream for NeverReturnsClientStream {
 }
 
 impl fmt::Debug for NeverReturnsClientStream {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TestClientStream catalog")
     }
 }

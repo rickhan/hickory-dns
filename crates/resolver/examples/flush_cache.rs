@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use hickory_resolver::{Resolver, net::runtime::TokioRuntimeProvider, proto::rr::RData};
 
 #[tokio::main]
 async fn main() {
@@ -7,46 +7,20 @@ async fn main() {
 }
 
 async fn tokio_main() {
-    let resolver = {
-        // To make this independent, if targeting macOS, BSD, Linux, or Windows, we can use the system's configuration:
-        #[cfg(any(unix, windows))]
-        {
-            use hickory_resolver::{TokioResolver, proto::runtime::TokioRuntimeProvider};
-
-            // use the system resolver configuration
-            Arc::new(
-                TokioResolver::builder(TokioRuntimeProvider::default())
-                    .expect("failed to create resolver")
-                    .build()
-                    .unwrap(),
-            )
-        }
-
-        // For other operating systems, we can use one of the preconfigured definitions
-        #[cfg(not(any(unix, windows)))]
-        {
-            // Directly reference the config types
-            use hickory_resolver::{
-                Resolver,
-                config::{ResolverConfig, ResolverOpts},
-            };
-
-            // Get a new resolver with the google nameservers as the upstream recursive resolvers
-            Arc::new(Resolver::tokio(
-                ResolverConfig::quad9(),
-                ResolverOpts::default(),
-            ))
-        }
-    };
+    // use the system resolver configuration
+    let resolver = Resolver::builder_tokio()
+        .expect("failed to create resolver")
+        .build()
+        .unwrap();
 
     // Create some futures representing name lookups.
     let names = ["hickory-dns.org.", "estada.ch.", "wikipedia.org."];
 
-    let first_resolve = resolve_list(&names, &*resolver).await;
-    let cached_resolve = resolve_list(&names, &*resolver).await;
+    let first_resolve = resolve_list(&names, &resolver).await;
+    let cached_resolve = resolve_list(&names, &resolver).await;
 
     resolver.clear_cache();
-    let second_resolve = resolve_list(&names, &*resolver).await;
+    let second_resolve = resolve_list(&names, &resolver).await;
 
     println!("first_resolve: {first_resolve:?}");
     println!("cached_resolve: {cached_resolve:?}");
@@ -56,9 +30,9 @@ async fn tokio_main() {
     drop(resolver);
 }
 
-async fn resolve_list<P: hickory_resolver::ConnectionProvider>(
+async fn resolve_list(
     names: &[&str],
-    resolver: &hickory_resolver::Resolver<P>,
+    resolver: &Resolver<TokioRuntimeProvider>,
 ) -> tokio::time::Duration {
     use tokio::time::Instant;
     let start_time = Instant::now();
@@ -67,7 +41,7 @@ async fn resolve_list<P: hickory_resolver::ConnectionProvider>(
     let futures = names
         .iter()
         .map(|name: &&str| {
-            let name: String = name.to_string();
+            let name = name.to_string();
             let resolver = resolver.clone();
             let future = {
                 let name = name.clone();
@@ -79,19 +53,30 @@ async fn resolve_list<P: hickory_resolver::ConnectionProvider>(
 
     // Go through the list of resolution operations in parallel and wait for them to complete.
     for (name, lookup) in futures {
-        let txts = lookup.await.expect("unable to spawn resolver").map(|txt| {
-            txt.iter()
-                .map(|rdata| rdata.to_string())
-                .collect::<Vec<_>>()
-        });
+        let txts = lookup
+            .await
+            .expect("unable to spawn resolver")
+            .map(|lookup| {
+                lookup
+                    .answers()
+                    .iter()
+                    .filter_map(|record| match record.data() {
+                        RData::TXT(txt) => Some(txt.to_string()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            });
         println!("  {name} returned to {txts:?}");
     }
     println!();
     start_time.elapsed()
 }
 
-#[tokio::test]
-async fn test_flush_cache() {
-    test_support::subscribe();
-    tokio_main().await;
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn test_flush_cache() {
+        test_support::subscribe();
+        super::tokio_main().await;
+    }
 }

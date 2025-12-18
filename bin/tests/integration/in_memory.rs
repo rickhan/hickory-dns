@@ -3,15 +3,13 @@ use std::str::FromStr;
 use test_support::subscribe;
 use tokio::runtime::Runtime;
 
-use hickory_proto::{
-    rr::{Name, RData, Record, RecordType, rdata::CNAME},
-    runtime::TokioRuntimeProvider,
-};
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_proto::rr::{Name, RData, Record, RecordType, rdata::CNAME};
 #[cfg(feature = "__dnssec")]
 use hickory_server::dnssec::NxProofKind;
 use hickory_server::{
     store::in_memory::InMemoryZoneHandler,
-    zone_handler::{AxfrPolicy, ZoneHandler, ZoneType},
+    zone_handler::{AxfrPolicy, LookupOptions, ZoneHandler, ZoneType},
 };
 
 #[test]
@@ -78,7 +76,7 @@ fn test_cname_loop() {
             &Name::from_str("foo.example.com.").unwrap().into(),
             RecordType::A,
             None,
-            Default::default(),
+            LookupOptions::default(),
         ))
         .unwrap();
 
@@ -101,7 +99,7 @@ fn test_cname_loop() {
             &Name::from_str("bar.example.com.").unwrap().into(),
             RecordType::A,
             None,
-            Default::default(),
+            LookupOptions::default(),
         ))
         .unwrap();
 
@@ -131,7 +129,7 @@ fn test_cname_loop() {
             &Name::from_str("baz.example.com.").unwrap().into(),
             RecordType::A,
             None,
-            Default::default(),
+            LookupOptions::default(),
         ))
         .unwrap();
 

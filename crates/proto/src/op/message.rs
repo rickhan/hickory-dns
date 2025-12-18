@@ -15,11 +15,14 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 #[cfg(feature = "__dnssec")]
-use crate::dnssec::rdata::{DNSSECRData, SIG, TSIG};
+use crate::dnssec::{
+    DnssecIter,
+    rdata::{DNSSECRData, SIG, TSIG},
+};
 #[cfg(any(feature = "std", feature = "no-std-rand"))]
 use crate::random;
 use crate::{
-    error::{ProtoError, ProtoErrorKind, ProtoResult},
+    error::{ProtoError, ProtoResult},
     op::{DnsResponse, Edns, Header, MessageType, OpCode, Query, ResponseCode},
     rr::{RData, Record, RecordType},
     serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder, EncodeMode},
@@ -139,6 +142,39 @@ impl Message {
 
         // TODO, perhaps just quickly add a few response records here? that we know would fit?
         msg
+    }
+
+    /// Strip DNSSEC records per RFC 4035 section 3.2.1
+    ///
+    /// Removes DNSSEC records that don't match the query type from all sections
+    /// when the DNSSEC OK bit is not set in the original query.
+    ///
+    /// Uses the first query in the message to determine the query type.
+    /// If there are no queries, returns the message unchanged.
+    ///
+    /// The query_has_dnssec_ok is a required parameter because the
+    /// dnssec_ok bit in the query might be different from the bit
+    /// in the response. See discussion in
+    /// [#3340](https://github.com/hickory-dns/hickory-dns/issues/3340)
+    pub fn maybe_strip_dnssec_records(mut self, query_has_dnssec_ok: bool) -> Self {
+        if query_has_dnssec_ok {
+            return self;
+        }
+
+        let Some(query_type) = self.queries().first().map(|q| q.query_type()) else {
+            return self; // No query, return unchanged
+        };
+
+        let predicate = |record: &Record| {
+            let record_type = record.record_type();
+            record_type == query_type || !record_type.is_dnssec()
+        };
+
+        self.answers_mut().retain(predicate);
+        self.authorities_mut().retain(predicate);
+        self.additionals_mut().retain(predicate);
+
+        self
     }
 
     /// Sets the [`Header`]
@@ -477,6 +513,12 @@ impl Message {
         mem::take(&mut self.answers)
     }
 
+    /// Returns a borrowed iterator of the answer records wrapped in a dnssec Proven type
+    #[cfg(feature = "__dnssec")]
+    pub fn dnssec_answers(&self) -> DnssecIter<'_> {
+        DnssecIter::new(&self.answers)
+    }
+
     /// ```text
     /// Authority       Carries RRs which describe other authoritative servers.
     ///                 May optionally carry the SOA RR for the authoritative
@@ -512,6 +554,16 @@ impl Message {
     /// Remove the Additional section records from the message
     pub fn take_additionals(&mut self) -> Vec<Record> {
         mem::take(&mut self.additionals)
+    }
+
+    /// Consume the message, returning an iterator over records from all sections
+    pub fn take_all_sections(&mut self) -> impl Iterator<Item = Record> {
+        let (answers, authorities, additionals) = (
+            mem::take(&mut self.answers),
+            mem::take(&mut self.authorities),
+            mem::take(&mut self.additionals),
+        );
+        answers.into_iter().chain(authorities).chain(additionals)
     }
 
     /// All sections chained
@@ -671,23 +723,27 @@ impl Message {
                 #[cfg(feature = "__dnssec")]
                 RData::DNSSEC(DNSSECRData::SIG(_)) => {
                     sig = MessageSignature::Sig0(
-                        record
-                            .map(|data| match data {
-                                RData::DNSSEC(DNSSECRData::SIG(sig)) => Some(sig),
-                                _ => None,
-                            })
-                            .unwrap(), // Safe: see `match` arm above
+                        Box::new(
+                            record
+                                .map(|data| match data {
+                                    RData::DNSSEC(DNSSECRData::SIG(sig)) => Some(sig),
+                                    _ => None,
+                                })
+                                .unwrap(),
+                        ), // Safe: see `match` arm above
                     )
                 }
                 #[cfg(feature = "__dnssec")]
                 RData::DNSSEC(DNSSECRData::TSIG(_)) => {
                     sig = MessageSignature::Tsig(
-                        record
-                            .map(|data| match data {
-                                RData::DNSSEC(DNSSECRData::TSIG(tsig)) => Some(tsig),
-                                _ => None,
-                            })
-                            .unwrap(), // Safe: see `match` arm above
+                        Box::new(
+                            record
+                                .map(|data| match data {
+                                    RData::DNSSEC(DNSSECRData::TSIG(tsig)) => Some(tsig),
+                                    _ => None,
+                                })
+                                .unwrap(),
+                        ), // Safe: see `match` arm above
                     )
                 }
                 RData::Update0(RecordType::OPT) | RData::OPT(_) => {
@@ -914,10 +970,8 @@ pub trait ResponseSigner: Send + Sync {
 fn count_was_truncated(result: ProtoResult<usize>) -> ProtoResult<(usize, bool)> {
     match result {
         Ok(count) => Ok((count, false)),
-        Err(e) => match &e.kind {
-            ProtoErrorKind::NotAllRecordsWritten { count } => Ok((*count, true)),
-            _ => Err(e),
-        },
+        Err(ProtoError::NotAllRecordsWritten { count }) => Ok((count, true)),
+        Err(e) => Err(e),
     }
 }
 
@@ -986,9 +1040,13 @@ where
     if include_signature {
         let count = match signature {
             #[cfg(feature = "__dnssec")]
-            MessageSignature::Sig0(rec) => count_was_truncated(encoder.emit_all(iter::once(rec)))?,
+            MessageSignature::Sig0(rec) => {
+                count_was_truncated(encoder.emit_all(iter::once(&**rec)))?
+            }
             #[cfg(feature = "__dnssec")]
-            MessageSignature::Tsig(rec) => count_was_truncated(encoder.emit_all(iter::once(rec)))?,
+            MessageSignature::Tsig(rec) => {
+                count_was_truncated(encoder.emit_all(iter::once(&**rec)))?
+            }
             MessageSignature::Unsigned => (0, false),
         };
         additional_count.0 += count.0;
@@ -1116,17 +1174,16 @@ impl fmt::Display for Message {
 /// information.
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-#[cfg_attr(not(feature = "__dnssec"), allow(missing_copy_implementations))]
 pub enum MessageSignature {
     /// The message is not signed, or the dnssec crate feature is not enabled.
     #[default]
     Unsigned,
     /// The message has an RFC 2931 SIG(0) signature [Record].
     #[cfg(feature = "__dnssec")]
-    Sig0(Record<SIG>),
+    Sig0(Box<Record<SIG>>),
     /// The message has an RFC 8945 TSIG signature [Record].
     #[cfg(feature = "__dnssec")]
-    Tsig(Record<TSIG>),
+    Tsig(Box<Record<TSIG>>),
 }
 
 #[cfg(test)]

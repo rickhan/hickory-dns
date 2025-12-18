@@ -16,6 +16,8 @@ use thiserror::Error;
 
 #[cfg(feature = "__dnssec")]
 use crate::dnssec::NxProofKind;
+use crate::net::{DnsError, NetError, NoRecords};
+use crate::proto::ProtoError;
 #[cfg(feature = "__dnssec")]
 use crate::proto::dnssec::crypto::Digest;
 #[cfg(feature = "__dnssec")]
@@ -26,9 +28,8 @@ use crate::proto::op::{Edns, ResponseCode, ResponseSigner};
 #[cfg(feature = "__dnssec")]
 use crate::proto::rr::Name;
 use crate::proto::rr::{LowerName, Record, RecordSet, RecordType, RrsetRecords, rdata::SOA};
-use crate::proto::{DnsError, NetError, NetErrorKind, NoRecords, ProtoError};
 #[cfg(feature = "recursor")]
-use crate::resolver::recursor::{self, ErrorKind};
+use crate::resolver::recursor::RecursorError;
 use crate::server::{Request, RequestInfo};
 
 mod auth_lookup;
@@ -39,7 +40,8 @@ mod message_response;
 pub(crate) mod metrics;
 
 pub use self::auth_lookup::{
-    AuthLookup, AuthLookupIter, AxfrRecords, LookupRecords, LookupRecordsIter, ZoneTransfer,
+    AuthLookup, AuthLookupIter, AxfrRecords, AxfrRecordsIter, LookupRecords, LookupRecordsIter,
+    ZoneTransfer,
 };
 pub use self::catalog::Catalog;
 pub use self::message_request::{MessageRequest, Queries, UpdateRequest};
@@ -307,7 +309,7 @@ impl<T, E> LookupControlFlow<T, E> {
     }
 }
 
-impl<E: std::fmt::Display> LookupControlFlow<AuthLookup, E> {
+impl<E: fmt::Display> LookupControlFlow<AuthLookup, E> {
     /// Return inner Ok variant or panic with a custom error message.
     pub fn expect(self, msg: &str) -> AuthLookup {
         match self {
@@ -411,7 +413,7 @@ pub enum LookupError {
     /// Recursive Resolver Error
     #[cfg(feature = "recursor")]
     #[error("Recursive resolution error: {0}")]
-    RecursiveError(#[from] recursor::Error),
+    RecursiveError(#[from] RecursorError),
     /// An underlying IO error occurred
     #[error("io error: {0}")]
     Io(io::Error),
@@ -457,21 +459,17 @@ impl LookupError {
     /// Return authority records
     pub fn authorities(&self) -> Option<Arc<[Record]>> {
         match self {
-            Self::NetError(e) => match &e.kind {
-                NetErrorKind::Dns(DnsError::NoRecordsFound(NoRecords { authorities, .. })) => {
-                    authorities.clone()
-                }
-                _ => None,
-            },
+            Self::NetError(NetError::Dns(DnsError::NoRecordsFound(NoRecords {
+                authorities,
+                ..
+            }))) => authorities.clone(),
+            Self::NetError(_) => None,
             #[cfg(feature = "recursor")]
-            Self::RecursiveError(e) => match e.kind() {
-                ErrorKind::Negative(fwd) => fwd.authorities.clone(),
-                ErrorKind::Net(NetError {
-                    kind: NetErrorKind::Dns(DnsError::NoRecordsFound(NoRecords { authorities, .. })),
-                    ..
-                }) => authorities.clone(),
-                _ => None,
-            },
+            Self::RecursiveError(RecursorError::Negative(fwd)) => fwd.authorities.clone(),
+            #[cfg(feature = "recursor")]
+            Self::RecursiveError(RecursorError::Net(NetError::Dns(DnsError::NoRecordsFound(
+                NoRecords { authorities, .. },
+            )))) => authorities.clone(),
             _ => None,
         }
     }

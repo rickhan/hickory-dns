@@ -213,6 +213,13 @@ impl<R: RecordData> Record<R> {
         self
     }
 
+    /// Decrement the record TTL by `offset` seconds.  If offset is greater than the record TTL,
+    /// the record TTL will be set to 0.
+    pub fn decrement_ttl(&mut self, offset: u32) -> &mut Self {
+        self.ttl = self.ttl.saturating_sub(offset);
+        self
+    }
+
     /// ```text
     /// CLASS           two octets which specify the class of the data in the
     ///                 RDATA field.
@@ -900,7 +907,7 @@ mod tests {
     #[test]
     fn test_mdns_cache_flush_bit_handling() {
         const RR_CLASS_OFFSET: usize = 1 /* empty name */ +
-            core::mem::size_of::<u16>() /* rr_type */;
+            size_of::<u16>() /* rr_type */;
 
         let mut record = Record::<RData>::stub();
         record.set_mdns_cache_flush(true);

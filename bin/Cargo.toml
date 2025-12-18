@@ -38,17 +38,14 @@ metrics = ["hickory-server/metrics", "hickory-resolver/metrics", "dep:metrics", 
 tls-aws-lc-rs = ["hickory-server/tls-aws-lc-rs", "__tls"]
 https-aws-lc-rs = ["hickory-server/https-aws-lc-rs", "tls-aws-lc-rs", "__https"]
 quic-aws-lc-rs = ["hickory-server/quic-aws-lc-rs", "tls-aws-lc-rs", "__quic"]
-h3-aws-lc-rs = ["hickory-server/h3-aws-lc-rs", "quic-aws-lc-rs", "__h3"]
 
 tls-ring = ["hickory-server/tls-ring", "__tls"]
 https-ring = ["hickory-server/https-ring", "tls-ring", "__https"]
 quic-ring = ["hickory-server/quic-ring", "tls-ring", "__quic"]
-h3-ring = ["hickory-server/h3-ring", "quic-ring", "__h3"]
 
 __tls = ["dep:rustls"]
 __https = []
 __quic = []
-__h3 = []
 
 dnssec-aws-lc-rs = ["hickory-server/dnssec-aws-lc-rs", "dep:rustls-pki-types", "__dnssec"]
 dnssec-ring = ["hickory-server/dnssec-ring", "dep:rustls-pki-types", "__dnssec"]
@@ -80,6 +77,7 @@ socket2.workspace = true
 rustls = { workspace = true, optional = true }
 rustls-pki-types = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
 time.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std"] }
@@ -88,6 +86,8 @@ tokio-util = { workspace = true, optional = true }
 toml.workspace = true
 hex.workspace = true
 hickory-proto.workspace = true
+hickory-net.workspace = true
+hickory-resolver.workspace = true
 hickory-server = { workspace = true, features = ["toml"] }
 hostname.workspace = true
 metrics = { workspace = true, optional = true }

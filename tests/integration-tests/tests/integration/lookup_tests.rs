@@ -4,12 +4,14 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-use hickory_proto::{
-    DnsError,
-    op::{DnsResponse, Query},
-    rr::{DNSClass, Name, RData, Record, RecordType, rdata::A},
+use hickory_net::{
+    DnsError, NetError,
     runtime::TokioRuntimeProvider,
     xfer::{DnsExchange, DnsMultiplexer},
+};
+use hickory_proto::{
+    op::{DnsRequestOptions, DnsResponse, Query},
+    rr::{DNSClass, Name, RData, Record, RecordType, rdata::A},
 };
 use hickory_resolver::{
     Hosts, LookupFuture, caching_client::CachingClient, config::LookupIpStrategy, lookup::Lookup,
@@ -40,14 +42,14 @@ async fn test_lookup() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("www.example.com.").unwrap()],
         RecordType::A,
-        Default::default(),
+        DnsRequestOptions::default(),
         CachingClient::new(0, client, false),
     );
     let lookup = lookup.await.unwrap();
 
     assert_eq!(
-        *lookup.iter().next().unwrap(),
-        RData::A(A::new(93, 184, 215, 14))
+        lookup.answers()[0].data(),
+        &RData::A(A::new(93, 184, 215, 14))
     );
 }
 
@@ -76,7 +78,7 @@ async fn test_lookup_hosts() {
         RecordType::A,
         Lookup::new_with_max_ttl(
             Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::A),
-            Arc::from([record]),
+            [record],
         ),
     );
 
@@ -84,7 +86,7 @@ async fn test_lookup_hosts() {
         vec![Name::from_str("www.example.com.").unwrap()],
         LookupIpStrategy::default(),
         CachingClient::new(0, client, false),
-        Default::default(),
+        DnsRequestOptions::default(),
         Arc::new(hosts),
         None,
     );
@@ -127,7 +129,7 @@ async fn test_lookup_ipv4_like() {
         vec![Name::from_str("1.2.3.4.example.com.").unwrap()],
         LookupIpStrategy::default(),
         CachingClient::new(0, client, false),
-        Default::default(),
+        DnsRequestOptions::default(),
         Arc::new(Hosts::default()),
         Some(RData::A(A::new(1, 2, 3, 4))),
     );
@@ -157,7 +159,7 @@ async fn test_lookup_ipv4_like_fall_through() {
         vec![Name::from_str("198.51.100.35.example.com.").unwrap()],
         LookupIpStrategy::default(),
         CachingClient::new(0, client, false),
-        Default::default(),
+        DnsRequestOptions::default(),
         Arc::new(Hosts::default()),
         Some(RData::A(A::new(198, 51, 100, 35))),
     );
@@ -184,15 +186,15 @@ async fn test_mock_lookup() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("www.example.com.").unwrap()],
         RecordType::A,
-        Default::default(),
+        DnsRequestOptions::default(),
         CachingClient::new(0, client, false),
     );
 
     let lookup = lookup.await.unwrap();
 
     assert_eq!(
-        *lookup.iter().next().unwrap(),
-        RData::A(A::new(93, 184, 215, 14))
+        lookup.answers()[0].data(),
+        &RData::A(A::new(93, 184, 215, 14))
     );
 }
 
@@ -215,15 +217,15 @@ async fn test_cname_lookup() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("www.example.com.").unwrap()],
         RecordType::A,
-        Default::default(),
+        DnsRequestOptions::default(),
         CachingClient::new(0, client, false),
     );
 
     let lookup = lookup.await.unwrap();
 
     assert_eq!(
-        *lookup.iter().next().unwrap(),
-        RData::A(A::new(93, 184, 215, 14))
+        lookup.answers()[0].data(),
+        &RData::A(A::new(93, 184, 215, 14))
     );
 }
 
@@ -251,13 +253,13 @@ async fn test_cname_lookup_preserve() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("www.example.com.").unwrap()],
         RecordType::A,
-        Default::default(),
+        DnsRequestOptions::default(),
         CachingClient::new(0, client, true),
     );
 
     let lookup = lookup.await.unwrap();
 
-    let mut iter = lookup.iter();
+    let mut iter = lookup.answers().iter().map(|r| r.data());
     assert_eq!(iter.next().unwrap(), cname_record.data());
     assert_eq!(*iter.next().unwrap(), RData::A(A::new(93, 184, 215, 14)));
 }
@@ -288,15 +290,15 @@ async fn test_chained_cname_lookup() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("www.example.com.").unwrap()],
         RecordType::A,
-        Default::default(),
+        DnsRequestOptions::default(),
         CachingClient::new(0, client, false),
     );
 
     let lookup = lookup.await.unwrap();
 
     assert_eq!(
-        *lookup.iter().next().unwrap(),
-        RData::A(A::new(93, 184, 215, 14))
+        lookup.answers()[0].data(),
+        &RData::A(A::new(93, 184, 215, 14))
     );
 }
 
@@ -331,13 +333,13 @@ async fn test_chained_cname_lookup_preserve() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("www.example.com.").unwrap()],
         RecordType::A,
-        Default::default(),
+        DnsRequestOptions::default(),
         CachingClient::new(0, client, true),
     );
 
     let lookup = lookup.await.unwrap();
 
-    let mut iter = lookup.iter();
+    let mut iter = lookup.answers().iter().map(|r| r.data());
     assert_eq!(iter.next().unwrap(), cname_record.data());
     assert_eq!(*iter.next().unwrap(), RData::A(A::new(93, 184, 215, 14)));
 }
@@ -417,7 +419,7 @@ async fn test_max_chained_lookup_depth() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("www.example.com.").unwrap()],
         RecordType::A,
-        Default::default(),
+        DnsRequestOptions::default(),
         client.clone(),
     );
 
@@ -428,7 +430,7 @@ async fn test_max_chained_lookup_depth() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("cname9.example.com.").unwrap()],
         RecordType::A,
-        Default::default(),
+        DnsRequestOptions::default(),
         client,
     );
 
@@ -436,8 +438,8 @@ async fn test_max_chained_lookup_depth() {
     let lookup = lookup.await.unwrap();
 
     assert_eq!(
-        *lookup.iter().next().unwrap(),
-        RData::A(A::new(93, 184, 215, 14))
+        lookup.answers()[0].data(),
+        &RData::A(A::new(93, 184, 215, 14))
     );
 }
 
@@ -446,8 +448,6 @@ async fn test_max_chained_lookup_depth() {
 // no NS records present (!ns.is_some())
 #[tokio::test]
 async fn test_forward_soa() {
-    use hickory_proto::NetErrorKind;
-
     subscribe();
     let resp_query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::NS);
     let soa_record = soa_record(
@@ -463,7 +463,7 @@ async fn test_forward_soa() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("www.example.com.").unwrap()],
         RecordType::NS,
-        Default::default(),
+        DnsRequestOptions::default(),
         client.clone(),
     );
 
@@ -472,8 +472,8 @@ async fn test_forward_soa() {
         panic!("Expected Error type for {lookup:?}");
     };
 
-    let NetErrorKind::Dns(DnsError::NoRecordsFound(no_records)) = e.kind else {
-        panic!("Unexpected kind: {e:?}");
+    let NetError::Dns(DnsError::NoRecordsFound(no_records)) = e else {
+        panic!("unexpected error: {e:?}");
     };
 
     assert!(no_records.soa.is_some());
@@ -485,14 +485,9 @@ async fn test_forward_soa() {
 // no SOA records present (!soa.is_some())
 #[tokio::test]
 async fn test_forward_ns() {
-    use hickory_proto::NetErrorKind;
-
     subscribe();
     let resp_query = Query::query(Name::from_str("example.com.").unwrap(), RecordType::A);
-    let ns1 = ns_record(
-        Default::default(),
-        Name::from_str("ns1.example.com").unwrap(),
-    );
+    let ns1 = ns_record(Name::default(), Name::from_str("ns1.example.com").unwrap());
     let message = message(resp_query.clone(), vec![], vec![ns1], vec![]);
 
     let client: MockClientHandle<_> =
@@ -502,7 +497,7 @@ async fn test_forward_ns() {
     let lookup = LookupFuture::lookup(
         vec![Name::from_str("example.com.").unwrap()],
         RecordType::A,
-        Default::default(),
+        DnsRequestOptions::default(),
         client.clone(),
     );
 
@@ -511,8 +506,8 @@ async fn test_forward_ns() {
         panic!("Expected Error type for {lookup:?}");
     };
 
-    let NetErrorKind::Dns(DnsError::NoRecordsFound(no_records)) = e.kind else {
-        panic!("Unexpected kind: {e:?}");
+    let NetError::Dns(DnsError::NoRecordsFound(no_records)) = e else {
+        panic!("unexpected error: {e:?}");
     };
 
     assert!(no_records.soa.is_none());

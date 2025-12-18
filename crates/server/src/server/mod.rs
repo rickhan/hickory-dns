@@ -14,11 +14,8 @@ use std::{
     time::Duration,
 };
 
-#[cfg(feature = "__tls")]
-use crate::proto::rustls::tls_from_stream;
 use bytes::Bytes;
 use futures_util::StreamExt;
-use hickory_proto::ProtoErrorKind;
 use ipnet::IpNet;
 #[cfg(feature = "__tls")]
 use rustls::{ServerConfig, server::ResolvesServerCert};
@@ -31,23 +28,25 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 #[cfg(feature = "__h3")]
-use crate::proto::h3::h3_server::H3Server;
+use crate::net::h3::h3_server::H3Server;
 #[cfg(feature = "__quic")]
-use crate::proto::quic::QuicServer;
+use crate::net::quic::QuicServer;
 #[cfg(feature = "__tls")]
-use crate::proto::rustls::default_provider;
+use crate::net::rustls::{default_provider, tls_from_stream};
 use crate::{
     access::AccessControl,
-    proto::{
-        BufDnsStreamHandle, NetError, ProtoError,
-        op::{Header, LowerQuery, MessageType, ResponseCode, SerialMessage},
-        rr::Record,
-        runtime::TokioTime,
-        runtime::{TokioRuntimeProvider, iocompat::AsyncIoTokioAsStd},
-        serialize::binary::{BinDecodable, BinDecoder},
+    net::{
+        BufDnsStreamHandle, NetError,
+        runtime::{TokioRuntimeProvider, TokioTime, iocompat::AsyncIoTokioAsStd},
         tcp::TcpStream,
         udp::UdpStream,
         xfer::Protocol,
+    },
+    proto::{
+        ProtoError,
+        op::{Header, LowerQuery, MessageType, ResponseCode, SerialMessage},
+        rr::Record,
+        serialize::binary::{BinDecodable, BinDecoder},
     },
     zone_handler::{MessageRequest, MessageResponseBuilder, Queries},
 };
@@ -79,11 +78,15 @@ pub struct Server<T: RequestHandler> {
 impl<T: RequestHandler> Server<T> {
     /// Creates a new ServerFuture with the specified Handler.
     pub fn new(handler: T) -> Self {
-        Self::with_access(handler, &[], &[])
+        Self::with_access(handler, [], [])
     }
 
     /// Creates a new ServerFuture with the specified Handler and denied/allowed networks
-    pub fn with_access(handler: T, denied_networks: &[IpNet], allowed_networks: &[IpNet]) -> Self {
+    pub fn with_access(
+        handler: T,
+        denied_networks: impl IntoIterator<Item = IpNet>,
+        allowed_networks: impl IntoIterator<Item = IpNet>,
+    ) -> Self {
         let mut access = AccessControl::default();
         access.insert_deny(denied_networks);
         access.insert_allow(allowed_networks);
@@ -278,15 +281,10 @@ impl<T: RequestHandler> Server<T> {
         // TODO: need to set a timeout between requests.
         _timeout: Duration,
         server_cert_resolver: Arc<dyn ResolvesServerCert>,
-        dns_hostname: Option<String>,
     ) -> io::Result<()> {
         let cx = self.context.clone();
-        self.join_set.spawn(quic_handler::handle_quic(
-            socket,
-            server_cert_resolver,
-            dns_hostname,
-            cx,
-        ));
+        self.join_set
+            .spawn(quic_handler::handle_quic(socket, server_cert_resolver, cx));
         Ok(())
     }
 
@@ -315,13 +313,11 @@ impl<T: RequestHandler> Server<T> {
         // TODO: need to set a timeout between requests.
         _timeout: Duration,
         tls_config: Arc<ServerConfig>,
-        dns_hostname: Option<String>,
-    ) -> io::Result<()> {
+    ) -> Result<(), NetError> {
         let cx = self.context.clone();
 
         self.join_set.spawn(quic_handler::handle_quic_with_server(
             QuicServer::with_socket_and_tls_config(socket, tls_config)?,
-            dns_hostname,
             cx,
         ));
         Ok(())
@@ -383,7 +379,7 @@ impl<T: RequestHandler> Server<T> {
         _timeout: Duration,
         tls_config: Arc<ServerConfig>,
         dns_hostname: Option<String>,
-    ) -> io::Result<()> {
+    ) -> Result<(), NetError> {
         self.join_set.spawn(h3_handler::handle_h3_with_server(
             H3Server::with_socket_and_tls_config(socket, tls_config)?,
             dns_hostname,
@@ -697,7 +693,7 @@ impl<R: ResponseHandler> ResponseHandler for ReportingResponseHandler<R> {
             impl Iterator<Item = &'a Record> + Send + 'a,
             impl Iterator<Item = &'a Record> + Send + 'a,
         >,
-    ) -> io::Result<ResponseInfo> {
+    ) -> Result<ResponseInfo, NetError> {
         let response_info = self.handler.send_response(response).await?;
 
         let id = self.request_header.id();
@@ -829,10 +825,7 @@ impl<T: RequestHandler> ServerContext<T> {
                 src: src_addr,
                 protocol,
             },
-            Err(ProtoError {
-                kind: ProtoErrorKind::FormError { header, error },
-                ..
-            }) => {
+            Err(ProtoError::FormError { header, error }) => {
                 // We failed to parse the request due to some issue in the message, but the header is available, so we can respond
                 let queries = Queries::empty();
 
@@ -1160,7 +1153,6 @@ mod tests {
                         UdpSocket::bind(self.quic_addr).await.unwrap(),
                         Duration::from_secs(1),
                         cert_key,
-                        None,
                     )
                     .unwrap();
             }

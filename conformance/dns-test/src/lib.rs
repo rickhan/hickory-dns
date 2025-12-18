@@ -8,11 +8,11 @@ use client::Client;
 use name_server::{NameServer, Running};
 
 pub use crate::container::Network;
-pub use crate::forwarder::Forwarder;
+pub use crate::forwarder::{Forwarder, ForwarderSettings};
 pub use crate::fqdn::FQDN;
-pub use crate::implementation::{HickoryCryptoProvider, Implementation, Repository};
+pub use crate::implementation::{HickoryCryptoProvider, Implementation, Repository, Role};
 pub use crate::pki::Pki;
-pub use crate::resolver::Resolver;
+pub use crate::resolver::{Resolver, ResolverSettings};
 pub use crate::trust_anchor::TrustAnchor;
 
 pub mod client;
@@ -161,48 +161,4 @@ fn repo_root() -> String {
     repo_root.pop(); // /conformance
     repo_root.pop(); // /
     repo_root.display().to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::env;
-
-    use super::*;
-
-    impl PartialEq for Implementation {
-        fn eq(&self, other: &Self) -> bool {
-            match (self, other) {
-                (Self::Hickory { .. }, Self::Hickory { .. }) => true,
-                _ => core::mem::discriminant(self) == core::mem::discriminant(other),
-            }
-        }
-    }
-
-    #[test]
-    fn immutable_subject() {
-        let before = super::SUBJECT.clone();
-        let newval = if before == Implementation::Unbound {
-            "bind"
-        } else {
-            "unbound"
-        };
-        env::set_var("DNS_TEST_SUBJECT", newval);
-
-        let after = super::SUBJECT.clone();
-        assert_eq!(before, after);
-    }
-
-    #[test]
-    fn immutable_peer() {
-        let before = super::PEER.clone();
-        let newval = if before == Implementation::Unbound {
-            "bind"
-        } else {
-            "unbound"
-        };
-        env::set_var("DNS_TEST_PEER", newval);
-
-        let after = super::PEER.clone();
-        assert_eq!(before, after);
-    }
 }

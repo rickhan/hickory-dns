@@ -13,10 +13,11 @@ use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::types::ToSql;
 use rusqlite::{self, Connection};
+use thiserror::Error;
 use time;
 use tracing::error;
 
-use crate::error::{PersistenceError, PersistenceErrorKind};
+use crate::proto::ProtoError;
 use crate::proto::rr::Record;
 use crate::proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
 
@@ -102,11 +103,10 @@ impl Journal {
         )?;
         //
         if count != 1 {
-            return Err(PersistenceErrorKind::WrongInsertCount {
+            return Err(PersistenceError::WrongInsertCount {
                 got: count,
                 expect: 1,
-            }
-            .into());
+            });
         };
 
         Ok(())
@@ -329,4 +329,36 @@ impl Iterator for JournalIter<'_> {
             }
         }
     }
+}
+
+/// The error kind for errors that get returned in the crate
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum PersistenceError {
+    /// An error that occurred when recovering from journal
+    #[error("error recovering from journal: {}", _0)]
+    Recovery(&'static str),
+
+    /// The number of inserted records didn't match the expected amount
+    #[error("wrong insert count: {} expect: {}", got, expect)]
+    WrongInsertCount {
+        /// The number of inserted records
+        got: usize,
+        /// The number of records expected to be inserted
+        expect: usize,
+    },
+
+    // foreign
+    /// An error got returned by the hickory-proto crate
+    #[error("proto error: {0}")]
+    Proto(#[from] ProtoError),
+
+    /// An error got returned from the sqlite crate
+    #[cfg(feature = "sqlite")]
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+
+    /// A request timed out
+    #[error("request timed out")]
+    Timeout,
 }

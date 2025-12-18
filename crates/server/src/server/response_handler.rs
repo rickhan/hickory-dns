@@ -5,18 +5,20 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::{io, net::SocketAddr};
+use std::net::SocketAddr;
 
 use tracing::{debug, error, trace};
 
 use crate::{
+    net::{
+        BufDnsStreamHandle, DnsStreamHandle, NetError, udp::MAX_RECEIVE_BUFFER_SIZE, xfer::Protocol,
+    },
     proto::{
-        BufDnsStreamHandle, DnsStreamHandle, ProtoError,
+        ProtoError,
         op::{Header, MessageType, OpCode, ResponseCode, SerialMessage},
         rr::Record,
         serialize::binary::BinEncodable,
         serialize::binary::BinEncoder,
-        xfer::Protocol,
     },
     server::ResponseInfo,
     zone_handler::MessageResponse,
@@ -39,7 +41,7 @@ pub trait ResponseHandler: Clone + Send + Sync + Unpin + 'static {
             impl Iterator<Item = &'a Record> + Send + 'a,
             impl Iterator<Item = &'a Record> + Send + 'a,
         >,
-    ) -> io::Result<ResponseInfo>;
+    ) -> Result<ResponseInfo, NetError>;
 }
 
 /// A handler for wrapping a [`BufDnsStreamHandle`], which will properly serialize the message and add the
@@ -80,7 +82,7 @@ impl ResponseHandle {
                     edns.max_payload()
                 } else {
                     // No EDNS, use the recommended max from RFC6891.
-                    hickory_proto::udp::MAX_RECEIVE_BUFFER_SIZE as u16
+                    MAX_RECEIVE_BUFFER_SIZE as u16
                 }
             }
             _ => u16::MAX,
@@ -101,7 +103,7 @@ impl ResponseHandler for ResponseHandle {
             impl Iterator<Item = &'a Record> + Send + 'a,
             impl Iterator<Item = &'a Record> + Send + 'a,
         >,
-    ) -> io::Result<ResponseInfo> {
+    ) -> Result<ResponseInfo, NetError> {
         let id = response.header().id();
         debug!(
             id,
@@ -129,8 +131,7 @@ impl ResponseHandler for ResponseHandle {
         })?;
 
         self.stream_handle
-            .send(SerialMessage::new(buffer, self.dst))
-            .map_err(|_| io::Error::other("unknown"))?;
+            .send(SerialMessage::new(buffer, self.dst))?;
 
         Ok(info)
     }

@@ -62,7 +62,7 @@
 //! use std::net::*;
 //! use tokio::runtime::Runtime;
 //! use hickory_resolver::Resolver;
-//! use hickory_resolver::proto::runtime::TokioRuntimeProvider;
+//! use hickory_resolver::net::runtime::TokioRuntimeProvider;
 //! use hickory_resolver::config::*;
 //!
 //! // We need a Tokio Runtime to run the resolver
@@ -100,7 +100,7 @@
 //! # use std::net::TcpStream;
 //! # use tokio::runtime::Runtime;
 //! # use hickory_resolver::Resolver;
-//! # use hickory_resolver::proto::runtime::TokioRuntimeProvider;
+//! # use hickory_resolver::net::runtime::TokioRuntimeProvider;
 //! # use hickory_resolver::config::ResolverConfig;
 //! #
 //! # let mut io_loop = Runtime::new().unwrap();
@@ -151,7 +151,7 @@
 //! # #[cfg(feature = "tokio")]
 //! # {
 //! use hickory_resolver::Resolver;
-//! use hickory_resolver::proto::runtime::TokioRuntimeProvider;
+//! use hickory_resolver::net::runtime::TokioRuntimeProvider;
 //! use hickory_resolver::config::*;
 //!
 //! // Construct a new Resolver with default configuration options
@@ -173,31 +173,16 @@
 //! complexities to figure out with IPv6. Once enabled, an mDNS `NameServer` will automatically be
 //! added to the `Resolver` and used for any lookups performed in the `.local.` zone.
 
-// LIBRARY WARNINGS
-#![warn(
-    clippy::default_trait_access,
-    clippy::dbg_macro,
-    clippy::print_stdout,
-    clippy::unimplemented,
-    clippy::use_self,
-    missing_copy_implementations,
-    missing_docs,
-    non_snake_case,
-    non_upper_case_globals,
-    rust_2018_idioms,
-    unreachable_pub
-)]
-#![allow(clippy::needless_doctest_main, clippy::single_component_path_imports)]
+#![warn(clippy::dbg_macro, clippy::print_stdout, missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
+pub use hickory_net as net;
 pub use hickory_proto as proto;
-// reexports from proto
-pub use proto::rr::{IntoName, Name};
 
 pub mod caching_client;
 pub mod config;
 mod connection_provider;
-pub use connection_provider::{ConnectionProvider, TlsConfig};
+pub use connection_provider::{ConnectionFuture, ConnectionProvider, TlsConfig};
 mod hosts;
 pub use hosts::Hosts;
 pub mod lookup;

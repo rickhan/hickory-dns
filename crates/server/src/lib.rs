@@ -14,24 +14,7 @@
  * limitations under the License.
  */
 
-// LIBRARY WARNINGS
-#![warn(
-    clippy::default_trait_access,
-    clippy::dbg_macro,
-    clippy::print_stdout,
-    clippy::unimplemented,
-    clippy::use_self,
-    missing_copy_implementations,
-    missing_docs,
-    non_snake_case,
-    non_upper_case_globals,
-    rust_2018_idioms,
-    unreachable_pub
-)]
-#![allow(
-    clippy::single_component_path_imports,
-    clippy::upper_case_acronyms, // can be removed on a major release boundary
-)]
+#![warn(clippy::dbg_macro, clippy::print_stdout, missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
 //! Hickory DNS is intended to be a fully compliant domain name server and client library.
@@ -47,16 +30,15 @@
 
 #[cfg(feature = "blocklist")]
 pub use crate::store::blocklist;
+pub use hickory_net as net;
 pub use hickory_proto as proto;
 #[cfg(any(feature = "resolver", feature = "recursor"))]
 pub use hickory_resolver as resolver;
 
 mod access;
-mod error;
-pub mod zone_handler;
-pub use error::{ConfigError, ConfigErrorKind, PersistenceError, PersistenceErrorKind};
 pub mod server;
 pub mod store;
+pub mod zone_handler;
 
 pub use self::server::Server;
 

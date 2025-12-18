@@ -17,15 +17,14 @@ use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::mem;
 use core::ops::Range;
 
 use tracing::debug;
 
+use super::DnsSecError;
 use super::rdata::tsig::{
     TSIG, TsigAlgorithm, make_tsig_record, message_tbs, signed_bitmessage_to_buf,
 };
-use super::{DnsSecError, DnsSecErrorKind};
 use crate::dnssec::rdata::tsig::TsigError;
 use crate::error::{ProtoError, ProtoResult};
 use crate::op::{
@@ -35,7 +34,6 @@ use crate::rr::Name;
 use crate::serialize::binary::{BinEncoder, EncodeMode};
 
 /// Context for a TSIG response, used to construct a TSIG response signer
-#[allow(missing_copy_implementations)]
 pub struct TSigResponseContext {
     request_id: u16,
     time: u64,
@@ -124,10 +122,10 @@ impl ResponseSigner for TSigResponseSigner {
                 .map_err(|e| ProtoError::from(e.to_string()))?,
         );
 
-        Ok(MessageSignature::Tsig(make_tsig_record(
+        Ok(MessageSignature::Tsig(Box::new(make_tsig_record(
             self.signer.signer_name().clone(),
             resp_tsig,
-        )))
+        ))))
     }
 }
 
@@ -141,10 +139,10 @@ impl ResponseSigner for BadSignatureSigner {
     fn sign(self: Box<Self>, _: &[u8]) -> Result<MessageSignature, ProtoError> {
         let mut stub_tsig = TSIG::stub(self.request_id, self.time, &self.signer);
         stub_tsig.set_error(TsigError::BadSig);
-        Ok(MessageSignature::Tsig(make_tsig_record(
+        Ok(MessageSignature::Tsig(Box::new(make_tsig_record(
             self.signer.signer_name().clone(),
             stub_tsig,
-        )))
+        ))))
     }
 }
 
@@ -165,7 +163,7 @@ impl ResponseSigner for UnknownKeySigner {
         // should use in the response since we didn't recognize the key name as one
         // of our configured signers. We choose a stand-in algorithm and reflect the
         // unknown key name in absence of further direction.
-        Ok(MessageSignature::Tsig(make_tsig_record(
+        Ok(MessageSignature::Tsig(Box::new(make_tsig_record(
             self.key_name.clone(),
             TSIG::new(
                 TsigAlgorithm::HmacSha256,
@@ -176,7 +174,7 @@ impl ResponseSigner for UnknownKeySigner {
                 Some(TsigError::BadKey),
                 Vec::new(),
             ),
-        )))
+        ))))
     }
 }
 
@@ -207,7 +205,7 @@ impl TSigner {
         fudge: u16,
     ) -> Result<Self, DnsSecError> {
         if !algorithm.supported() {
-            return Err(DnsSecErrorKind::TsigUnsupportedMacAlgorithm(algorithm).into());
+            return Err(DnsSecError::TsigUnsupportedMacAlgorithm(algorithm));
         }
 
         signer_name.set_fqdn(true);
@@ -291,7 +289,7 @@ impl TSigner {
         // https://tools.ietf.org/html/rfc8945#section-5.2
         // 1.  Check key
         if record.name() != &self.0.signer_name || tsig.algorithm() != &self.0.algorithm {
-            return Err(DnsSecErrorKind::TsigWrongKey.into());
+            return Err(DnsSecError::TsigWrongKey);
         }
 
         // 2.  Check MAC
@@ -343,7 +341,7 @@ impl TSigner {
         // prefix, the size of the encoded response, and a rough approximation of the
         // size of the stub TSIG RR.
         let mut tbs_buf = Vec::with_capacity(
-            previous_mac.len() + mem::size_of::<u16>() + encoded_response.len() + 128,
+            previous_mac.len() + size_of::<u16>() + encoded_response.len() + 128,
         );
         let mut encoder = BinEncoder::with_mode(&mut tbs_buf, EncodeMode::Normal);
 
@@ -389,7 +387,10 @@ impl MessageSigner for TSigner {
                 Err(ProtoError::from("tsig validation error: outdated response"))
             }
         };
-        Ok((MessageSignature::Tsig(tsig), Some(Box::new(verifier))))
+        Ok((
+            MessageSignature::Tsig(Box::new(tsig)),
+            Some(Box::new(verifier)),
+        ))
     }
 }
 

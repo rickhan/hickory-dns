@@ -1,17 +1,13 @@
-use alloc::{fmt, string::String};
+use alloc::string::String;
 use std::io;
 
-#[cfg(feature = "backtrace")]
-use crate::trace;
+use thiserror::Error;
+
 use crate::{
     error::ProtoError,
     rr::RecordType,
     serialize::{binary::DecodeError, txt::Token},
 };
-
-#[cfg(feature = "backtrace")]
-use backtrace::Backtrace as ExtBacktrace;
-use thiserror::Error;
 
 /// An alias for parse results returned by functions of this crate
 pub type ParseResult<T> = ::core::result::Result<T, ParseError>;
@@ -19,7 +15,7 @@ pub type ParseResult<T> = ::core::result::Result<T, ParseError>;
 /// The error kind for parse errors that get returned in the crate
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum ParseErrorKind {
+pub enum ParseError {
     /// An invalid numerical character was found
     #[error("invalid numerical character: {0}")]
     CharToInt(char),
@@ -56,7 +52,7 @@ pub enum ParseErrorKind {
     /// An error got returned from IO
     #[cfg(feature = "std")]
     #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// An error from the lexer
     #[error("lexer error: {0}")]
@@ -79,9 +75,9 @@ pub enum ParseErrorKind {
     UnsupportedRecordType(RecordType),
 }
 
-impl Clone for ParseErrorKind {
+impl Clone for ParseError {
     fn clone(&self) -> Self {
-        use ParseErrorKind::*;
+        use ParseError::*;
         match self {
             CharToInt(c) => CharToInt(*c),
             Message(msg) => Message(msg),
@@ -93,7 +89,7 @@ impl Clone for ParseErrorKind {
             AddrParse(e) => AddrParse(e.clone()),
             DataEncoding(e) => DataEncoding(*e),
             #[cfg(feature = "std")]
-            Io(e) => Io(std::io::Error::from(e.kind())),
+            Io(e) => Io(io::Error::from(e.kind())),
             Lexer(e) => Lexer(e.clone()),
             ParseInt(e) => ParseInt(e.clone()),
             Proto(e) => Proto(e.clone()),
@@ -103,107 +99,21 @@ impl Clone for ParseErrorKind {
     }
 }
 
-/// The error type for parse errors that get returned in the crate
-#[derive(Error, Debug)]
-pub struct ParseError {
-    kind: ParseErrorKind,
-    #[cfg(feature = "backtrace")]
-    backtrack: Option<ExtBacktrace>,
-}
-
-impl ParseError {
-    /// Get the kind of the error
-    pub fn kind(&self) -> &ParseErrorKind {
-        &self.kind
-    }
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        cfg_if::cfg_if! {
-            if #[cfg(feature = "backtrace")] {
-                if let Some(backtrace) = &self.backtrack {
-                    fmt::Display::fmt(&self.kind, f)?;
-                    fmt::Debug::fmt(backtrace, f)
-                } else {
-                    fmt::Display::fmt(&self.kind, f)
-                }
-            } else {
-                fmt::Display::fmt(&self.kind, f)
-            }
-        }
-    }
-}
-
-impl From<ParseErrorKind> for ParseError {
-    fn from(kind: ParseErrorKind) -> Self {
-        Self {
-            kind,
-            #[cfg(feature = "backtrace")]
-            backtrack: trace!(),
-        }
-    }
-}
-
 impl From<&'static str> for ParseError {
     fn from(msg: &'static str) -> Self {
-        ParseErrorKind::Message(msg).into()
+        Self::Message(msg)
     }
 }
 
 impl From<String> for ParseError {
     fn from(msg: String) -> Self {
-        ParseErrorKind::Msg(msg).into()
+        Self::Msg(msg)
     }
 }
 
 impl From<DecodeError> for ParseError {
     fn from(e: DecodeError) -> Self {
-        ParseErrorKind::from(ProtoError::from(e)).into()
-    }
-}
-
-#[cfg(not(feature = "std"))]
-impl From<core::net::AddrParseError> for ParseError {
-    fn from(e: core::net::AddrParseError) -> Self {
-        ParseErrorKind::from(e).into()
-    }
-}
-
-#[cfg(feature = "std")]
-impl From<core::net::AddrParseError> for ParseError {
-    fn from(e: core::net::AddrParseError) -> Self {
-        ParseErrorKind::from(e).into()
-    }
-}
-
-impl From<::data_encoding::DecodeError> for ParseError {
-    fn from(e: data_encoding::DecodeError) -> Self {
-        ParseErrorKind::from(e).into()
-    }
-}
-
-impl From<io::Error> for ParseError {
-    fn from(e: io::Error) -> Self {
-        ParseErrorKind::from(e).into()
-    }
-}
-
-impl From<LexerError> for ParseError {
-    fn from(e: LexerError) -> Self {
-        ParseErrorKind::from(e).into()
-    }
-}
-
-impl From<core::num::ParseIntError> for ParseError {
-    fn from(e: core::num::ParseIntError) -> Self {
-        ParseErrorKind::from(e).into()
-    }
-}
-
-impl From<ProtoError> for ParseError {
-    fn from(e: ProtoError) -> Self {
-        ParseErrorKind::from(e).into()
+        Self::from(ProtoError::from(e))
     }
 }
 
@@ -220,12 +130,12 @@ impl From<ParseError> for io::Error {
 }
 
 /// An alias for lexer results returned by functions of this crate
-pub(crate) type LexerResult<T> = core::result::Result<T, LexerError>;
+pub(crate) type LexerResult<T> = Result<T, LexerError>;
 
 /// The error kind for lexer errors that get returned in the crate
 #[derive(Eq, PartialEq, Debug, Error, Clone)]
 #[non_exhaustive]
-pub enum LexerErrorKind {
+pub enum LexerError {
     /// Unexpected end of input
     #[error("unexpected end of input")]
     EOF,
@@ -261,46 +171,4 @@ pub enum LexerErrorKind {
     /// An unrecognized octet was found
     #[error("unrecognized octet: {0:x}")]
     UnrecognizedOctet(u32),
-}
-
-/// The error type for lexer errors that get returned in the crate
-#[derive(Clone, Error, Debug)]
-pub struct LexerError {
-    kind: LexerErrorKind,
-    #[cfg(feature = "backtrace")]
-    backtrack: Option<ExtBacktrace>,
-}
-
-impl LexerError {
-    /// Get the kind of the error
-    pub fn kind(&self) -> &LexerErrorKind {
-        &self.kind
-    }
-}
-
-impl From<LexerErrorKind> for LexerError {
-    fn from(kind: LexerErrorKind) -> Self {
-        Self {
-            kind,
-            #[cfg(feature = "backtrace")]
-            backtrack: trace!(),
-        }
-    }
-}
-
-impl fmt::Display for LexerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        cfg_if::cfg_if! {
-            if #[cfg(feature = "backtrace")] {
-                if let Some(backtrace) = &self.backtrack {
-                    fmt::Display::fmt(&self.kind, f)?;
-                    fmt::Debug::fmt(backtrace, f)
-                } else {
-                    fmt::Display::fmt(&self.kind, f)
-                }
-            } else {
-                fmt::Display::fmt(&self.kind, f)
-            }
-        }
-    }
 }

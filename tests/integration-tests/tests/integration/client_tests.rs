@@ -1,4 +1,3 @@
-use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 #[cfg(feature = "__dnssec")]
 use std::str::FromStr;
@@ -16,10 +15,16 @@ use hickory_integration::TestClientStream;
 #[cfg(all(feature = "__dnssec", feature = "sqlite"))]
 use hickory_integration::example_zone::create_example;
 use hickory_integration::{GOOGLE_V4, TEST3_V4};
-use hickory_proto::NetErrorKind;
+use hickory_net::NetError;
 #[cfg(feature = "__dnssec")]
-use hickory_proto::client::DnssecClient;
-use hickory_proto::client::{Client, ClientHandle};
+use hickory_net::client::DnssecClient;
+use hickory_net::client::{Client, ClientHandle};
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::tcp::TcpClientStream;
+use hickory_net::udp::UdpClientStream;
+#[cfg(all(feature = "__dnssec", feature = "sqlite"))]
+use hickory_net::xfer::DnsMultiplexerConnect;
+use hickory_net::xfer::{DnsHandle, DnsMultiplexer};
 #[cfg(all(feature = "__dnssec", feature = "sqlite"))]
 use hickory_proto::dnssec::rdata::{DNSSECRData, KEY};
 #[cfg(all(feature = "__dnssec", feature = "sqlite"))]
@@ -33,25 +38,19 @@ use hickory_proto::op::{DnsRequest, Edns, Message, Query};
 use hickory_proto::rr::Record;
 use hickory_proto::rr::rdata::opt::{EdnsCode, EdnsOption};
 use hickory_proto::rr::{DNSClass, Name, RData, RecordType, rdata::A};
-use hickory_proto::runtime::TokioRuntimeProvider;
-use hickory_proto::tcp::TcpClientStream;
-use hickory_proto::udp::UdpClientStream;
-#[cfg(all(feature = "__dnssec", feature = "sqlite"))]
-use hickory_proto::xfer::DnsMultiplexerConnect;
-use hickory_proto::xfer::{DnsHandle, DnsMultiplexer};
 #[cfg(all(feature = "__dnssec", feature = "sqlite"))]
 use hickory_server::zone_handler::{AxfrPolicy, Catalog, ZoneHandler};
 use test_support::subscribe;
 
 #[cfg(all(feature = "__dnssec", feature = "sqlite"))]
-pub struct TestClientConnection {
+struct TestClientConnection {
     catalog: Arc<StdMutex<Catalog>>,
 }
 
 #[cfg(all(feature = "__dnssec", feature = "sqlite"))]
 impl TestClientConnection {
-    pub fn new(catalog: Catalog) -> TestClientConnection {
-        TestClientConnection {
+    fn new(catalog: Catalog) -> Self {
+        Self {
             catalog: Arc::new(StdMutex::new(catalog)),
         }
     }
@@ -60,7 +59,7 @@ impl TestClientConnection {
         &self,
         signer: Option<Arc<dyn MessageSigner>>,
     ) -> DnsMultiplexerConnect<
-        BoxFuture<'static, Result<TestClientStream, io::Error>>,
+        BoxFuture<'static, Result<TestClientStream, NetError>>,
         TestClientStream,
     > {
         let (client_stream, handle) = TestClientStream::new(self.catalog.clone());
@@ -263,9 +262,8 @@ async fn test_timeout_query(mut client: Client<TokioRuntimeProvider>) {
 
     let err = response.unwrap_err();
 
-    if let NetErrorKind::Timeout = err.kind {
-    } else {
-        panic!("expected timeout error")
+    if !matches!(err, NetError::Timeout) {
+        panic!("expected timeout error");
     }
 }
 
@@ -288,7 +286,7 @@ async fn test_timeout_query_tcp() {
 
     let multiplexer = DnsMultiplexer::new(stream, sender, None);
     match Client::<TokioRuntimeProvider>::connect(multiplexer).await {
-        Err(e) if matches!(e.kind(), io::ErrorKind::TimedOut) => {}
+        Err(NetError::Timeout) => {}
         _ => panic!("expected timeout"),
     }
 }
@@ -403,26 +401,10 @@ async fn test_nsec3_nxdomain() {
     assert_eq!(response.response_code(), ResponseCode::NXDomain);
 }
 
-#[tokio::test]
-#[cfg(feature = "__dnssec")]
-async fn test_nsec3_no_data() {
-    subscribe();
-
-    let name = Name::from_labels(vec!["www", "example", "com"]).unwrap();
-
-    let mut client = tcp_dnssec_client(GOOGLE_V4).await;
-    let response = client
-        .query(name, DNSClass::IN, RecordType::PTR)
-        .await
-        .expect("Query failed");
-
-    // the name "www.example.com" exists but there's no PTR record on it
-    assert_eq!(response.response_code(), ResponseCode::NoError);
-}
-
 #[allow(deprecated)]
 #[cfg(all(feature = "__dnssec", feature = "sqlite"))]
 async fn create_sig0_ready_client(mut catalog: Catalog) -> (Client<TokioRuntimeProvider>, Name) {
+    use hickory_proto::dnssec::rdata::key::{KeyTrust, KeyUsage, Protocol, UpdateScope};
     use hickory_server::store::sqlite::SqliteZoneHandler;
     use rustls_pki_types::PrivatePkcs8KeyDer;
 
@@ -451,10 +433,10 @@ async fn create_sig0_ready_client(mut catalog: Catalog) -> (Client<TokioRuntimeP
         Name::from_str("trusted.example.com.").unwrap(),
         Duration::minutes(5).whole_seconds() as u32,
         RData::DNSSEC(DNSSECRData::KEY(KEY::new(
-            Default::default(),
-            Default::default(),
-            Default::default(),
-            Default::default(),
+            KeyTrust::default(),
+            KeyUsage::default(),
+            UpdateScope::default(),
+            Protocol::default(),
             signer.key().algorithm(),
             pub_key.public_bytes().to_vec(),
         ))),

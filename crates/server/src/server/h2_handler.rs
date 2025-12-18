@@ -5,7 +5,7 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use ::h2::server;
 use bytes::Bytes;
@@ -28,7 +28,12 @@ use super::{
     sanitize_src_address,
 };
 use crate::{
-    proto::{NetError, h2, http::Version, rr::Record, xfer::Protocol},
+    net::{
+        NetError, h2,
+        http::{self, Version},
+        xfer::Protocol,
+    },
+    proto::{rr::Record, serialize::binary::BinEncoder},
     zone_handler::MessageResponse,
 };
 
@@ -209,11 +214,7 @@ impl ResponseHandler for HttpsResponseHandle {
             impl Iterator<Item = &'a Record> + Send + 'a,
             impl Iterator<Item = &'a Record> + Send + 'a,
         >,
-    ) -> io::Result<ResponseInfo> {
-        use crate::proto::h2::HttpsError;
-        use crate::proto::http::response;
-        use crate::proto::serialize::binary::BinEncoder;
-
+    ) -> Result<ResponseInfo, NetError> {
         let id = response.header().id();
         let mut bytes = Vec::with_capacity(512);
         // mut block
@@ -225,16 +226,11 @@ impl ResponseHandler for HttpsResponseHandle {
             })?
         };
         let bytes = Bytes::from(bytes);
-        let response = response::new(Version::Http2, bytes.len())?;
+        let response = http::response(Version::Http2, bytes.len())?;
 
         debug!("sending response: {:#?}", response);
-        let mut stream = self
-            .0
-            .lock()
-            .await
-            .send_response(response, false)
-            .map_err(HttpsError::from)?;
-        stream.send_data(bytes, true).map_err(HttpsError::from)?;
+        let mut stream = self.0.lock().await.send_response(response, false)?;
+        stream.send_data(bytes, true)?;
 
         Ok(info)
     }

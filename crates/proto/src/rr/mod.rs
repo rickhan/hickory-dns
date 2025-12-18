@@ -32,10 +32,12 @@ pub use self::dns_class::DNSClass;
 pub use self::domain::{IntoName, Name};
 pub use self::record_data::RData;
 pub use self::record_type::RecordType;
-pub(crate) use self::record_type_set::RecordTypeSet;
+pub use self::record_type_set::RecordTypeSet;
 pub use self::resource::Record;
-pub use self::rr_set::RecordSet;
-pub use self::rr_set::RrsetRecords;
+
+#[cfg(feature = "__dnssec")]
+pub use self::rr_set::RecordsAndRrsigsIter;
+pub use self::rr_set::{RecordSet, RecordSetParts, RrsetRecords};
 pub use line_info::LineInfo;
 pub use lower_name::LowerName;
 pub use rr_key::RrKey;

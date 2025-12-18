@@ -1,8 +1,8 @@
-use hickory_proto::client::ClientHandle;
+use hickory_net::client::ClientHandle;
+use hickory_net::xfer::DnsHandle;
 use hickory_proto::op::DnsRequest;
 #[cfg(feature = "__dnssec")]
 use hickory_proto::op::Edns;
-use hickory_proto::xfer::DnsHandle;
 #[cfg(feature = "__dnssec")]
 use hickory_server::zone_handler::LookupOptions;
 
@@ -16,10 +16,10 @@ pub struct MutMessageHandle<C: ClientHandle + Unpin> {
 impl<C: ClientHandle + Unpin> MutMessageHandle<C> {
     #[allow(dead_code)]
     pub fn new(client: C) -> Self {
-        MutMessageHandle {
+        Self {
             client,
             #[cfg(feature = "__dnssec")]
-            lookup_options: Default::default(),
+            lookup_options: LookupOptions::default(),
         }
     }
 }

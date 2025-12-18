@@ -20,30 +20,34 @@ use futures_util::{
 };
 use tracing::debug;
 
-use crate::cache::{MAX_TTL, ResponseCache, TtlConfig};
-use crate::caching_client::CachingClient;
-use crate::config::{OpportunisticEncryption, ResolveHosts, ResolverConfig, ResolverOpts};
-use crate::connection_provider::ConnectionProvider;
 #[cfg(feature = "__tls")]
 use crate::connection_provider::TlsConfig;
-use crate::hosts::Hosts;
-use crate::lookup::{Lookup, TypedLookup};
-use crate::lookup_ip::{LookupIp, LookupIpFuture};
-use crate::name_server_pool::{NameServerPool, NameServerTransportState, PoolContext};
-#[cfg(feature = "__dnssec")]
-use crate::proto::dnssec::{DnssecDnsHandle, TrustAnchors};
 #[cfg(feature = "tokio")]
-use crate::proto::runtime::TokioRuntimeProvider;
-use crate::proto::{
-    NetError, NetErrorKind,
-    op::{DnsRequest, DnsRequestOptions, DnsResponse, Query},
-    rr::domain::usage::ONION,
-    rr::{IntoName, Name, RData, Record, RecordType, rdata},
-    xfer::{DnsHandle, RetryDnsHandle},
+use crate::net::runtime::TokioRuntimeProvider;
+use crate::{
+    cache::{MAX_TTL, ResponseCache, TtlConfig},
+    caching_client::CachingClient,
+    config::{OpportunisticEncryption, ResolveHosts, ResolverConfig, ResolverOpts},
+    connection_provider::ConnectionProvider,
+    hosts::Hosts,
+    lookup::Lookup,
+    lookup_ip::{LookupIp, LookupIpFuture},
+    name_server_pool::{NameServerPool, NameServerTransportState, PoolContext},
+    net::{
+        NetError,
+        xfer::{DnsHandle, RetryDnsHandle},
+    },
+    proto::{
+        op::{DnsRequest, DnsRequestOptions, DnsResponse, Query},
+        rr::domain::usage::ONION,
+        rr::{IntoName, Name, RData, Record, RecordType},
+    },
 };
+#[cfg(feature = "__dnssec")]
+use crate::{net::dnssec::DnssecDnsHandle, proto::dnssec::TrustAnchors};
 
 macro_rules! lookup_fn {
-    ($p:ident, $l:ty, $r:path) => {
+    ($p:ident, $r:path) => {
         /// Performs a lookup for the associated type.
         ///
         /// *hint* queries that end with a '.' are fully qualified names and are cheaper lookups
@@ -51,7 +55,7 @@ macro_rules! lookup_fn {
         /// # Arguments
         ///
         /// * `query` - a string which parses to a domain name, failure to parse will return an error
-        pub async fn $p(&self, query: impl IntoName) -> Result<TypedLookup<$l>, NetError> {
+        pub async fn $p(&self, query: impl IntoName) -> Result<Lookup, NetError> {
             self.inner_lookup(query.into_name()?, $r, self.request_options())
                 .await
         }
@@ -202,7 +206,7 @@ impl<R: ConnectionProvider> Resolver<R> {
                 finally_ip_addr = Some(record);
             } else {
                 let query = Query::query(name, ip_addr.record_type());
-                let lookup = Lookup::new_with_max_ttl(query, Arc::from([record]));
+                let lookup = Lookup::new_with_max_ttl(query, [record]);
                 return Ok(lookup.into());
             }
         }
@@ -212,7 +216,7 @@ impl<R: ConnectionProvider> Resolver<R> {
             (Err(_), Some(ip_addr)) => {
                 // it was a valid IP, return that...
                 let query = Query::query(ip_addr.name().clone(), ip_addr.record_type());
-                let lookup = Lookup::new_with_max_ttl(query, Arc::from([ip_addr.clone()]));
+                let lookup = Lookup::new_with_max_ttl(query, [ip_addr.clone()]);
                 return Ok(lookup.into());
             }
             (Err(err), None) => return Err(err),
@@ -325,17 +329,17 @@ impl<R: ConnectionProvider> Resolver<R> {
         }
     }
 
-    lookup_fn!(reverse_lookup, rdata::PTR, RecordType::PTR);
-    lookup_fn!(ipv4_lookup, rdata::A, RecordType::A);
-    lookup_fn!(ipv6_lookup, rdata::AAAA, RecordType::AAAA);
-    lookup_fn!(mx_lookup, rdata::MX, RecordType::MX);
-    lookup_fn!(ns_lookup, rdata::NS, RecordType::NS);
-    lookup_fn!(smimea_lookup, rdata::SMIMEA, RecordType::SMIMEA);
-    lookup_fn!(soa_lookup, rdata::SOA, RecordType::SOA);
-    lookup_fn!(srv_lookup, rdata::SRV, RecordType::SRV);
-    lookup_fn!(tlsa_lookup, rdata::TLSA, RecordType::TLSA);
-    lookup_fn!(txt_lookup, rdata::TXT, RecordType::TXT);
-    lookup_fn!(cert_lookup, rdata::CERT, RecordType::CERT);
+    lookup_fn!(reverse_lookup, RecordType::PTR);
+    lookup_fn!(ipv4_lookup, RecordType::A);
+    lookup_fn!(ipv6_lookup, RecordType::AAAA);
+    lookup_fn!(mx_lookup, RecordType::MX);
+    lookup_fn!(ns_lookup, RecordType::NS);
+    lookup_fn!(smimea_lookup, RecordType::SMIMEA);
+    lookup_fn!(soa_lookup, RecordType::SOA);
+    lookup_fn!(srv_lookup, RecordType::SRV);
+    lookup_fn!(tlsa_lookup, RecordType::TLSA);
+    lookup_fn!(txt_lookup, RecordType::TXT);
+    lookup_fn!(cert_lookup, RecordType::CERT);
 
     /// Flushes/Removes all entries from the cache
     pub fn clear_cache(&self) {
@@ -348,6 +352,12 @@ impl<R: ConnectionProvider> Resolver<R> {
         request_opts.recursion_desired = self.context.options.recursion_desired;
         request_opts.use_edns = self.context.options.edns0;
         request_opts.case_randomization = self.context.options.case_randomization;
+
+        // Set DNSSEC OK bit when DNSSEC validation is enabled
+        #[cfg(feature = "__dnssec")]
+        {
+            request_opts.edns_set_dnssec_ok = self.context.options.validate;
+        }
 
         request_opts
     }
@@ -625,7 +635,7 @@ where
     ) -> Self {
         let name = names
             .pop()
-            .ok_or_else(|| NetError::from(NetErrorKind::Message("can not lookup for no names")));
+            .ok_or(NetError::Message("can not lookup for no names"));
 
         let query = match name {
             Ok(name) => {
@@ -668,7 +678,7 @@ where
                 // If the query returned a successful lookup, we will attempt
                 // to retry if the lookup is empty. Otherwise, we will return
                 // that lookup.
-                Poll::Ready(Ok(lookup)) => lookup.records().is_empty(),
+                Poll::Ready(Ok(lookup)) => lookup.answers().is_empty(),
                 // If the query failed, we will attempt to retry.
                 Poll::Ready(Err(_)) => true,
             };
@@ -682,7 +692,8 @@ where
                     // for that next name and continue looping.
                     self.query = self
                         .client_cache
-                        .lookup(Query::query(name, record_type), options);
+                        .lookup(Query::query(name, record_type), options)
+                        .boxed();
                     // Continue looping with the new query. It will be polled
                     // on the next iteration of the loop.
                     continue;
@@ -708,7 +719,8 @@ pub(crate) mod testing {
     use crate::Resolver;
     use crate::config::{GOOGLE, LookupIpStrategy, NameServerConfig, ResolverConfig};
     use crate::connection_provider::ConnectionProvider;
-    use crate::proto::{rr::Name, runtime::Executor};
+    use crate::net::runtime::Executor;
+    use crate::proto::rr::Name;
 
     /// Test IP lookup from URLs.
     pub(crate) async fn lookup_test<R: ConnectionProvider>(config: ResolverConfig, handle: R) {
@@ -822,12 +834,17 @@ pub(crate) mod testing {
         assert_ne!(response.iter().count(), 0);
         println!(
             "{:?}",
-            response.as_lookup().record_iter().collect::<Vec<_>>()
+            response
+                .as_lookup()
+                .message()
+                .all_sections()
+                .collect::<Vec<_>>()
         );
         assert!(
             response
                 .as_lookup()
-                .record_iter()
+                .message()
+                .all_sections()
                 .any(|record| record.proof().is_secure())
         );
     }
@@ -848,9 +865,13 @@ pub(crate) mod testing {
         let lookup_ip = response.unwrap();
         println!(
             "{:?}",
-            lookup_ip.as_lookup().record_iter().collect::<Vec<_>>()
+            lookup_ip
+                .as_lookup()
+                .message()
+                .all_sections()
+                .collect::<Vec<_>>()
         );
-        for record in lookup_ip.as_lookup().record_iter() {
+        for record in lookup_ip.as_lookup().message().all_sections() {
             assert!(record.proof().is_insecure());
         }
     }
@@ -1207,10 +1228,10 @@ mod tests {
     use super::testing::{sec_lookup_fails_test, sec_lookup_test};
     use super::*;
     use crate::config::{CLOUDFLARE, GOOGLE, ResolverConfig, ResolverOpts};
+    use crate::net::DnsError;
+    use crate::net::xfer::DnsExchange;
     use crate::proto::op::{DnsRequest, DnsResponse, Message};
     use crate::proto::rr::rdata::A;
-    use crate::proto::xfer::DnsExchange;
-    use crate::proto::{DnsError, NoRecords};
 
     fn is_send_t<T: Send>() -> bool {
         true
@@ -1442,8 +1463,9 @@ mod tests {
             )
             .await
             .unwrap()
+            .answers()
             .iter()
-            .map(|r| r.ip_addr().unwrap())
+            .map(|r| r.data().ip_addr().unwrap())
             .collect::<Vec<IpAddr>>(),
             vec![Ipv4Addr::LOCALHOST]
         );
@@ -1461,7 +1483,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .records()[0]
+                .answers()[0]
             )
             .ip_addr()
             .unwrap(),
@@ -1480,8 +1502,9 @@ mod tests {
             )
             .await
             .unwrap()
+            .answers()
             .iter()
-            .map(|r| r.ip_addr().unwrap())
+            .map(|r| r.data().ip_addr().unwrap())
             .collect::<Vec<IpAddr>>(),
             vec![Ipv4Addr::LOCALHOST]
         );
@@ -1512,17 +1535,12 @@ mod tests {
         .await
         .expect_err("this should have been a NoRecordsFound");
 
-        if let NetErrorKind::Dns(DnsError::NoRecordsFound(NoRecords {
-            query,
-            negative_ttl,
-            ..
-        })) = error.kind
-        {
-            assert_eq!(*query, Query::query(Name::root(), RecordType::A));
-            assert_eq!(negative_ttl, None);
-        } else {
+        let NetError::Dns(DnsError::NoRecordsFound(no_records)) = error else {
             panic!("wrong error received");
-        }
+        };
+
+        assert_eq!(*no_records.query, Query::query(Name::root(), RecordType::A));
+        assert_eq!(no_records.negative_ttl, None);
     }
 
     #[derive(Clone)]

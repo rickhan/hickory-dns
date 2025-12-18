@@ -1,5 +1,9 @@
 use std::{net::Ipv4Addr, str::FromStr, sync::Arc};
 
+use hickory_net::{
+    runtime::{Time, TokioTime},
+    xfer::Protocol,
+};
 use hickory_proto::{
     op::{Edns, Message, MessageType, OpCode, Query, ResponseCode},
     rr::{
@@ -9,9 +13,7 @@ use hickory_proto::{
             opt::{EdnsCode, EdnsOption, NSIDPayload},
         },
     },
-    runtime::{Time, TokioTime},
     serialize::binary::BinEncodable,
-    xfer::Protocol,
 };
 #[cfg(feature = "__dnssec")]
 use hickory_server::dnssec::NxProofKind;
@@ -30,7 +32,7 @@ use hickory_integration::{example_zone::create_example, *};
 use test_support::subscribe;
 
 #[allow(clippy::unreadable_literal)]
-pub fn create_records(records: &mut InMemoryZoneHandler) {
+fn create_records(records: &mut InMemoryZoneHandler) {
     let origin: Name = records.origin().into();
     records.upsert_mut(
         Record::from_rdata(
@@ -112,7 +114,7 @@ pub fn create_records(records: &mut InMemoryZoneHandler) {
     );
 }
 
-pub fn create_test() -> InMemoryZoneHandler {
+fn create_test() -> InMemoryZoneHandler {
     let origin = Name::parse("test.com.", None).unwrap();
 
     let mut records = InMemoryZoneHandler::empty(
@@ -1044,9 +1046,9 @@ mod dnssec {
             ZoneType::Primary,
             AxfrPolicy::Deny,
             Some(NxProofKind::Nsec3 {
-                algorithm: Default::default(),
-                salt: Default::default(),
-                iterations: Default::default(),
+                algorithm: Nsec3HashAlgorithm::default(),
+                salt: Arc::default(),
+                iterations: 0,
                 opt_out: false,
             }),
         );

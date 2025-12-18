@@ -1,18 +1,20 @@
-#![allow(clippy::dbg_macro)]
+#![allow(unreachable_pub)]
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 
 use futures_executor::block_on;
 
+use hickory_net::{
+    runtime::{Time, TokioTime},
+    xfer::Protocol,
+};
 use hickory_proto::{
     op::{Header, Message, MessageType, OpCode, Query, ResponseCode},
     rr::{
         Name, RData, RecordType,
         rdata::{A as A4, AAAA},
     },
-    runtime::{Time, TokioTime},
-    xfer::Protocol,
 };
 use hickory_server::{
     server::Request,

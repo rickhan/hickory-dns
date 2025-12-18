@@ -42,11 +42,10 @@ use crate::{
     zone_handler::{DnssecZoneHandler, Nsec3QueryInfo, UpdateRequest},
 };
 use crate::{
-    error::{PersistenceError, PersistenceErrorKind},
+    net::runtime::{RuntimeProvider, TokioRuntimeProvider},
     proto::{
         op::{ResponseCode, ResponseSigner},
         rr::{DNSClass, LowerName, Name, RData, Record, RecordSet, RecordType, RrKey},
-        runtime::{RuntimeProvider, TokioRuntimeProvider},
     },
     server::{Request, RequestInfo},
     store::{
@@ -62,7 +61,7 @@ use crate::{
 use LookupControlFlow::Continue;
 
 pub mod persistence;
-pub use persistence::Journal;
+pub use persistence::{Journal, PersistenceError};
 
 /// SqliteZoneHandler is responsible for storing the resource records for a particular zone.
 ///
@@ -232,7 +231,7 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                         #[cfg(feature = "metrics")]
                         self.metrics.zone_records.increment(1);
                     }
-                    Err(error) => return Err(PersistenceErrorKind::Recovery(error.to_str()).into()),
+                    Err(error) => return Err(PersistenceError::Recovery(error.to_str())),
                 }
             }
         }
@@ -1284,7 +1283,7 @@ impl TsigKeyConfig {
                 self.key_file.display()
             )
         })?;
-        let signer_name = Name::from_str(&self.name).unwrap_or(zone_name.clone());
+        let signer_name = Name::from_str(&self.name).unwrap_or_else(|_| zone_name.clone());
 
         TSigner::new(key_data, self.algorithm.clone(), signer_name, self.fudge)
             .map_err(|e| format!("invalid TSIG key configuration: {e}"))

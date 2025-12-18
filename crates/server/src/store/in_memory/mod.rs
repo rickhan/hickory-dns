@@ -27,16 +27,15 @@ use tracing::{debug, info};
 #[cfg(feature = "__dnssec")]
 use crate::{
     dnssec::NxProofKind,
-    proto::{
-        dnssec::{
-            DnsSecResult, SigSigner,
-            rdata::{DNSKEY, DNSSECRData, key::KEY},
-        },
-        runtime::Time,
+    net::runtime::Time,
+    proto::dnssec::{
+        DnsSecResult, SigSigner,
+        rdata::{DNSKEY, DNSSECRData, key::KEY},
     },
     zone_handler::{DnssecZoneHandler, Nsec3QueryInfo},
 };
 use crate::{
+    net::runtime::{RuntimeProvider, TokioRuntimeProvider},
     proto::{
         op::{ResponseCode, ResponseSigner},
         rr::{DNSClass, LineInfo, LowerName, Name, RData, Record, RecordSet, RecordType, RrKey},
@@ -393,7 +392,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
         let inner = self.inner.read().await;
 
         if query_type == RecordType::AXFR {
-            return LookupControlFlow::Break(Err(LookupError::NetError(
+            return Break(Err(LookupError::NetError(
                 "AXFR must be handled with ZoneHandler::zone_transfer()".into(),
             )));
         }
@@ -528,7 +527,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
             }
         };
 
-        LookupControlFlow::Continue(Ok(AuthLookup::answers(
+        Continue(Ok(AuthLookup::answers(
             answers,
             additionals.map(|a| LookupRecords::many(lookup_options, a)),
         )))

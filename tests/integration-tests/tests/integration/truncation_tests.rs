@@ -1,11 +1,11 @@
-use hickory_proto::DnsHandle;
-use hickory_proto::client::Client;
+use hickory_net::DnsHandle;
+use hickory_net::client::Client;
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::udp::UdpClientStream;
+use hickory_net::xfer::FirstAnswer;
 use hickory_proto::op::{DnsRequest, Edns, Message, Query};
 use hickory_proto::rr::rdata::{A, SOA};
 use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordSet, RecordType, RrKey};
-use hickory_proto::runtime::TokioRuntimeProvider;
-use hickory_proto::udp::UdpClientStream;
-use hickory_proto::xfer::FirstAnswer;
 use hickory_server::Server;
 #[cfg(feature = "__dnssec")]
 use hickory_server::dnssec::NxProofKind;
@@ -68,7 +68,7 @@ async fn test_truncation() {
     server.shutdown_gracefully().await.unwrap();
 }
 
-pub fn new_large_catalog(num_records: u32) -> Catalog {
+fn new_large_catalog(num_records: u32) -> Catalog {
     // Create a large record set.
     let name = large_name();
     let mut record_set = RecordSet::new(name.clone(), RecordType::A, 0);
@@ -123,6 +123,6 @@ fn large_name() -> Name {
     n(LARGE_NAME)
 }
 
-pub fn n<S: AsRef<str>>(name: S) -> Name {
+fn n<S: AsRef<str>>(name: S) -> Name {
     Name::from_str(name.as_ref()).unwrap()
 }

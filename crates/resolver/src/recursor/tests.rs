@@ -10,15 +10,14 @@ use std::{
 use test_support::{MockNetworkHandler, MockProvider, MockRecord, MockResponseSection, subscribe};
 use tokio::time as TokioTime;
 
-use super::{Error, Recursor, RecursorBuilder, RecursorMode, is_subzone};
+use super::{Recursor, RecursorError, RecursorMode, RecursorOptions, is_subzone};
 use crate::{
     cache::TtlConfig,
     config::ResolverOpts,
+    net::{NetError, runtime::TokioRuntimeProvider, xfer::Protocol},
     proto::{
-        NetError,
         op::{Message, Query, ResponseCode},
         rr::{Name, Record, RecordType},
-        xfer::Protocol,
     },
 };
 
@@ -28,8 +27,8 @@ async fn recursor_connection_deduplication() -> Result<(), NetError> {
 
     let query_name = Name::from_ascii("host.hickory-dns.testing.")?;
     let dup_query_name = Name::from_ascii("host.hickory-dns-dup.testing.")?;
-    let (provider, recursor_builder) = test_fixture()?;
-    let recursor = recursor_builder.build(&[ROOT_IP])?;
+    let (provider, options) = test_fixture()?;
+    let recursor = Recursor::with_options(&[ROOT_IP], options, provider.clone())?;
 
     // This test is inspecting the number of new TCP connection calls for each nameserver.
     // If deduplication is working correctly, there should be one for each after the
@@ -66,8 +65,15 @@ async fn recursor_connection_deduplication_non_cached() -> Result<(), NetError> 
 
     let query_name = Name::from_ascii("host.hickory-dns.testing.")?;
     let dup_query_name = Name::from_ascii("host.hickory-dns-dup.testing.")?;
-    let (provider, recursor_builder) = test_fixture()?;
-    let recursor = recursor_builder.ns_cache_size(1).build(&[ROOT_IP])?;
+    let (provider, options) = test_fixture()?;
+    let recursor = Recursor::with_options(
+        &[ROOT_IP],
+        RecursorOptions {
+            ns_cache_size: 1,
+            ..options
+        },
+        provider.clone(),
+    )?;
 
     let response = recursor
         .resolve(
@@ -374,18 +380,25 @@ async fn ns_pool_zone_name_test() -> Result<(), NetError> {
         ),
     ];
 
-    let recursor_no_cache = Recursor::builder_with_provider(MockProvider::new(
-        MockNetworkHandler::new(responses.clone()),
-    ))
-    .clear_deny_servers()
-    .ns_cache_size(1)
-    .build(&[ROOT_IP])?;
+    let recursor_no_cache = Recursor::with_options(
+        &[ROOT_IP],
+        RecursorOptions {
+            deny_server: Vec::new(),
+            ns_cache_size: 1,
+            ..RecursorOptions::default()
+        },
+        MockProvider::new(MockNetworkHandler::new(responses.clone())),
+    )?;
 
-    let recursor_cache =
-        Recursor::builder_with_provider(MockProvider::new(MockNetworkHandler::new(responses)))
-            .clear_deny_servers()
-            .ns_cache_size(1024)
-            .build(&[ROOT_IP])?;
+    let recursor_cache = Recursor::with_options(
+        &[ROOT_IP],
+        RecursorOptions {
+            deny_server: Vec::new(),
+            ns_cache_size: 1024,
+            ..RecursorOptions::default()
+        },
+        MockProvider::new(MockNetworkHandler::new(responses.clone())),
+    )?;
 
     for recursor in [recursor_no_cache, recursor_cache] {
         assert_eq!(
@@ -439,7 +452,12 @@ async fn not_fully_qualified_domain_name_in_query() -> Result<(), NetError> {
     subscribe();
 
     let j_root_servers_net_ip = IpAddr::from([192, 58, 128, 30]);
-    let recursor = Recursor::builder().build(&[j_root_servers_net_ip])?;
+    let recursor = Recursor::with_options(
+        &[j_root_servers_net_ip],
+        RecursorOptions::default(),
+        TokioRuntimeProvider::default(),
+    )?;
+
     let name = Name::from_ascii("example.com")?;
     assert!(!name.is_fqdn());
     let query = Query::query(name, RecordType::A);
@@ -448,6 +466,73 @@ async fn not_fully_qualified_domain_name_in_query() -> Result<(), NetError> {
         .await
         .unwrap_err();
     assert!(res.to_string().contains("fully qualified"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cache_negative_responses() -> Result<(), NetError> {
+    subscribe();
+
+    let exists_name = Name::from_ascii("exists.hickory-dns.testing.")?;
+    let no_exist_name = Name::from_ascii("doesnotexist.hickory-dns.testing.")?;
+
+    let tld_zone = Name::from_ascii("testing.")?;
+    let tld_ns = Name::from_ascii("testing.testing.")?;
+    let leaf_zone = Name::from_ascii("hickory-dns.testing.")?;
+    let leaf_ns = Name::from_ascii("ns.hickory-dns.testing.")?;
+
+    let responses = vec![
+        MockRecord::ns(ROOT_IP, &tld_zone, &tld_ns),
+        MockRecord::a(ROOT_IP, &tld_ns, TLD_IP)
+            .with_query_name(&tld_zone)
+            .with_query_type(RecordType::NS)
+            .with_section(MockResponseSection::Additional),
+        MockRecord::ns(TLD_IP, &leaf_zone, &leaf_ns),
+        MockRecord::a(TLD_IP, &leaf_ns, LEAF_IP)
+            .with_query_name(&leaf_zone)
+            .with_query_type(RecordType::NS)
+            .with_section(MockResponseSection::Additional),
+        MockRecord::a(LEAF_IP, &exists_name, LEAF_IP),
+        MockRecord::soa(LEAF_IP, &leaf_ns, &leaf_zone, &leaf_ns)
+            .with_query_name(&no_exist_name)
+            .with_query_type(RecordType::A)
+            .with_ttl(3600),
+        MockRecord::soa(LEAF_IP, &leaf_ns, &leaf_zone, &leaf_ns)
+            .with_query_name(&no_exist_name)
+            .with_query_type(RecordType::NS)
+            .with_ttl(3600),
+    ];
+
+    let provider = MockProvider::new(MockNetworkHandler::new(responses));
+    let recursor = Recursor::with_options(
+        &[ROOT_IP],
+        RecursorOptions {
+            deny_server: Vec::new(), // We use addresses in the default deny filters.
+            ..RecursorOptions::default()
+        },
+        provider.clone(),
+    )?;
+
+    for _ in 0..2 {
+        let response = recursor
+            .resolve(
+                Query::query(no_exist_name.clone(), RecordType::A),
+                Instant::now(),
+                false,
+            )
+            .await;
+        assert!(response.is_err());
+
+        assert_eq!(
+            provider
+                .queries(&LEAF_IP)
+                .iter()
+                .filter(|x| x.name() == &no_exist_name && x.query_type() == RecordType::A)
+                .count(),
+            1,
+        );
+    }
 
     Ok(())
 }
@@ -512,7 +597,7 @@ fn ns_cache_test_fixture(
     ns_ttl: u32,
     ttl_config: TtlConfig,
     off_domain: bool,
-) -> Result<Recursor<MockProvider>, Error> {
+) -> Result<Recursor<MockProvider>, RecursorError> {
     subscribe();
     let query_1_name = Name::from_ascii("host.hickory-dns.testing.")?;
     let query_2_name = Name::from_ascii("host2.hickory-dns.testing.")?;
@@ -614,14 +699,21 @@ fn ns_cache_test_fixture(
         },
     ));
 
-    let provider = MockProvider::new(handler);
-    Recursor::builder_with_provider(provider)
-        .clear_deny_servers() // We use addresses in the default deny filters.
-        .ttl_config(ttl_config)
-        .build(&[ROOT_IP])
+    Recursor::with_options(
+        &[ROOT_IP],
+        RecursorOptions {
+            deny_server: Vec::new(),
+            cache_policy: ttl_config,
+            ..RecursorOptions::default()
+        },
+        MockProvider::new(handler),
+    )
 }
 
-async fn ttl_lookup(recursor: &Recursor<MockProvider>, name: &Name) -> Result<Message, Error> {
+async fn ttl_lookup(
+    recursor: &Recursor<MockProvider>,
+    name: &Name,
+) -> Result<Message, RecursorError> {
     recursor
         .resolve(
             Query::query(name.clone(), RecordType::A),
@@ -636,7 +728,7 @@ fn validate_response(response: Message, name: &Name, ip: IpAddr) -> bool {
         && response.answers() == [Record::from_rdata(name.clone(), 0, ip.into())]
 }
 
-fn test_fixture() -> Result<(MockProvider, RecursorBuilder<MockProvider>), NetError> {
+fn test_fixture() -> Result<(MockProvider, RecursorOptions), NetError> {
     let query_name = Name::from_ascii("host.hickory-dns.testing.")?;
     let dup_query_name = Name::from_ascii("host.hickory-dns-dup.testing.")?;
 
@@ -676,9 +768,12 @@ fn test_fixture() -> Result<(MockProvider, RecursorBuilder<MockProvider>), NetEr
     ));
 
     let provider = MockProvider::new(handler);
-    let recursor = Recursor::builder_with_provider(provider.clone()).clear_deny_servers(); // We use addresses in the default deny filters.
+    let options = RecursorOptions {
+        deny_server: Vec::new(),
+        ..RecursorOptions::default()
+    };
 
-    Ok((provider, recursor))
+    Ok((provider, options))
 }
 
 #[cfg(feature = "metrics")]
@@ -723,11 +818,17 @@ mod metrics {
             ]);
 
             let provider = MockProvider::new(handler);
+            let recursor = Recursor::with_options(
+                &[ROOT_IP],
+                RecursorOptions {
+                    deny_server: Vec::new(),
+                    ..RecursorOptions::default()
+                },
+                provider,
+            )
+            .unwrap();
+
             runtime.block_on(async {
-                let recursor = Recursor::builder_with_provider(provider)
-                    .clear_deny_servers() // We use addresses in the default deny filters.
-                    .build(&[ROOT_IP])
-                    .unwrap();
                 for _ in 0..3 {
                     let response = recursor
                         .resolve(
@@ -778,6 +879,86 @@ mod metrics {
     }
 
     const A_RR_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+}
+
+#[cfg(all(
+    test,
+    feature = "serde",
+    feature = "toml",
+    any(feature = "__tls", feature = "__quic")
+))]
+mod config {
+    use std::path::Path;
+
+    use crate::{
+        config::{OpportunisticEncryption, OpportunisticEncryptionConfig},
+        recursor::{DnssecPolicyConfig, RecursiveConfig},
+    };
+
+    #[test]
+    fn can_parse_recursive_config() {
+        let input = r#"roots = "/etc/root.hints"
+dnssec_policy.ValidateWithStaticKey.path = "/etc/trusted-key.key""#;
+
+        let config = toml::from_str::<RecursiveConfig>(input).unwrap();
+
+        if let DnssecPolicyConfig::ValidateWithStaticKey { path, .. } = config.dnssec_policy {
+            assert_eq!(Some(Path::new("/etc/trusted-key.key")), path.as_deref());
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn can_parse_recursor_cache_policy() {
+        use std::time::Duration;
+
+        use hickory_proto::rr::RecordType;
+
+        let input = r#"roots = "/etc/root.hints"
+
+[cache_policy.default]
+positive_max_ttl = 14400
+
+[cache_policy.A]
+positive_max_ttl = 3600"#;
+
+        let config = toml::from_str::<RecursiveConfig>(input).unwrap();
+
+        assert_eq!(
+            *config
+                .options
+                .cache_policy
+                .positive_response_ttl_bounds(RecordType::MX)
+                .end(),
+            Duration::from_secs(14400)
+        );
+
+        assert_eq!(
+            *config
+                .options
+                .cache_policy
+                .positive_response_ttl_bounds(RecordType::A)
+                .end(),
+            Duration::from_secs(3600)
+        )
+    }
+
+    #[test]
+    fn can_parse_recursor_opportunistic_enc_policy() {
+        let input = r#"roots = "/etc/root.hints"
+[opportunistic_encryption]
+enabled = {}
+"#;
+
+        let config = toml::from_str::<RecursiveConfig>(input).unwrap();
+        assert_eq!(
+            config.options.opportunistic_encryption,
+            OpportunisticEncryption::Enabled {
+                config: OpportunisticEncryptionConfig::default()
+            }
+        );
+    }
 }
 
 const ROOT_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 1, 1));

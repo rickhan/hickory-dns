@@ -21,25 +21,30 @@ use rustls_pki_types::PrivatePkcs8KeyDer;
 use tokio::{runtime::Runtime, time::sleep};
 
 use crate::server_harness::{ServerProtocol, SocketPorts, named_test_harness};
+#[cfg(feature = "blocklist")]
+use hickory_net::NetError;
 #[cfg(all(feature = "__dnssec", feature = "sqlite"))]
-use hickory_proto::dnssec::{
-    Algorithm, DnssecDnsHandle, SigSigner, SigningKey, TrustAnchors, crypto::RsaSigningKey,
-    rdata::DNSKEY,
+use hickory_net::dnssec::DnssecDnsHandle;
+use hickory_net::{
+    client::{Client, ClientHandle},
+    runtime::TokioRuntimeProvider,
+    tcp::TcpClientStream,
+    xfer::Protocol,
 };
 #[cfg(all(feature = "__dnssec", feature = "sqlite"))]
-use hickory_proto::rr::Record;
+use hickory_proto::dnssec::{
+    Algorithm, SigSigner, SigningKey, TrustAnchors, crypto::RsaSigningKey, rdata::DNSKEY,
+};
 #[cfg(feature = "blocklist")]
-use hickory_proto::{NetError, NetErrorKind, op::DnsResponse};
+use hickory_proto::op::DnsResponse;
+#[cfg(all(feature = "__dnssec", feature = "sqlite"))]
+use hickory_proto::rr::Record;
 use hickory_proto::{
-    client::{Client, ClientHandle},
     op::MessageSigner,
     rr::{
         DNSClass, Name, RData, RecordType,
         rdata::{A, name::PTR},
     },
-    runtime::TokioRuntimeProvider,
-    tcp::TcpClientStream,
-    xfer::Protocol,
 };
 use test_support::subscribe;
 
@@ -812,10 +817,7 @@ async fn retry_client_lookup(
     loop {
         return match client.query(name.clone(), class, rtype).await {
             Ok(res) => Ok(res),
-            Err(NetError {
-                kind: NetErrorKind::Timeout,
-                ..
-            }) if i < LOOKUP_RETRIES => {
+            Err(NetError::Timeout) if i < LOOKUP_RETRIES => {
                 i += 1;
                 sleep(Duration::from_secs(2)).await;
                 continue;

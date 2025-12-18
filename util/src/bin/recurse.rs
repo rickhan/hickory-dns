@@ -7,30 +7,18 @@
 
 //! The recurse program
 
-// BINARY WARNINGS
-#![warn(
-    clippy::default_trait_access,
-    clippy::dbg_macro,
-    clippy::unimplemented,
-    missing_copy_implementations,
-    missing_docs,
-    non_snake_case,
-    non_upper_case_globals,
-    rust_2018_idioms,
-    unreachable_pub
-)]
-
 use std::{net::IpAddr, time::Instant};
 
 use clap::Parser;
 use console::style;
 
+use hickory_net::runtime::TokioRuntimeProvider;
 use hickory_proto::{
     ROOTS,
     op::Query,
     rr::{Name, RecordType},
 };
-use hickory_resolver::recursor::Recursor;
+use hickory_resolver::recursor::{Recursor, RecursorOptions};
 
 /// A CLI interface for the hickory-dns-recursor.
 ///
@@ -74,7 +62,11 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         opts.nameservers = ROOTS.to_vec();
     }
 
-    let recursor = Recursor::builder().build(&opts.nameservers)?;
+    let recursor = Recursor::with_options(
+        &opts.nameservers,
+        RecursorOptions::default(),
+        TokioRuntimeProvider::default(),
+    )?;
 
     // execute query
     println!(

@@ -23,18 +23,18 @@ default = ["none"]
 none = []
 bind = []
 
-[lib]
-name = "hickory_compatibility"
-path = "src/lib.rs"
-
 [dependencies]
 data-encoding = { workspace = true, features = ["alloc"] }
 rand = { workspace = true, features = ["std", "thread_rng"] }
 
 [dev-dependencies]
 futures.workspace = true
+hickory-net = { workspace = true, features = ["dnssec-ring", "tokio"] }
 hickory-proto = { workspace = true, features = ["dnssec-ring"] }
 rustls-pki-types.workspace = true
 test-support.workspace = true
 time.workspace = true
 tokio.workspace = true
+
+[lints]
+workspace = true

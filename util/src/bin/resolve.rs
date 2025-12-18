@@ -7,19 +7,6 @@
 
 //! The resolve program
 
-// BINARY WARNINGS
-#![warn(
-    clippy::default_trait_access,
-    clippy::dbg_macro,
-    clippy::unimplemented,
-    missing_copy_implementations,
-    missing_docs,
-    non_snake_case,
-    non_upper_case_globals,
-    rust_2018_idioms,
-    unreachable_pub
-)]
-
 use std::{
     fs::File,
     io::{BufRead, BufReader},
@@ -35,11 +22,8 @@ use console::style;
 use tokio::task::JoinSet;
 use tokio::time::MissedTickBehavior;
 
-use hickory_proto::{
-    DnsError, NetError, NetErrorKind,
-    rr::{Record, RecordData, RecordType},
-    runtime::TokioRuntimeProvider,
-};
+use hickory_net::{DnsError, NetError, runtime::TokioRuntimeProvider};
+use hickory_proto::rr::{Record, RecordData, RecordType};
 use hickory_resolver::{
     TokioResolver,
     config::{
@@ -155,18 +139,37 @@ fn print_ok(lookup: Lookup) {
         style(lookup.query()).blue()
     );
 
-    for r in lookup.record_iter() {
-        print_record(&r);
+    let message = lookup.message();
+
+    let answers = message.answers();
+    if !answers.is_empty() {
+        println!("\n;; {} SECTION:", style("ANSWER").yellow());
+        for r in answers {
+            print_record(&r);
+        }
+    }
+
+    let authority = message.authorities();
+    if !authority.is_empty() {
+        println!("\n;; {} SECTION:", style("AUTHORITY").yellow());
+        for r in authority {
+            print_record(&r);
+        }
+    }
+
+    let additional = message.additionals();
+    if !additional.is_empty() {
+        println!("\n;; {} SECTION:", style("ADDITIONAL").yellow());
+        for r in additional {
+            print_record(&r);
+        }
     }
 }
 
 fn print_error(error: NetError) {
-    let no_records = match error.kind {
-        NetErrorKind::Dns(DnsError::NoRecordsFound(no_records)) => no_records,
-        _ => {
-            println!("{error:?}");
-            return;
-        }
+    let NetError::Dns(DnsError::NoRecordsFound(no_records)) = error else {
+        println!("{error:?}");
+        return;
     };
 
     println!(
@@ -225,7 +228,7 @@ async fn execute_query(
         let v4addr = name
             .parse::<IpAddr>()
             .unwrap_or_else(|_| panic!("Could not parse {name} into an IP address"));
-        Ok(resolver.reverse_lookup(v4addr).await?.into())
+        Ok(resolver.reverse_lookup(v4addr).await?)
     } else {
         Ok(resolver.lookup(name.to_string(), ty).await?)
     }

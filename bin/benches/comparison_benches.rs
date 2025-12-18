@@ -10,19 +10,20 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 use std::time::Duration;
-use std::{env, io, mem, thread};
+use std::{env, mem, thread};
 
-use hickory_proto::runtime::TokioRuntimeProvider;
 use test::Bencher;
 use tokio::runtime::Runtime;
 
-use hickory_proto::client::{Client, ClientHandle};
+use hickory_net::NetError;
+use hickory_net::client::{Client, ClientHandle};
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::tcp::TcpClientStream;
+use hickory_net::udp::UdpClientStream;
+use hickory_net::xfer::{DnsMultiplexer, DnsRequestSender};
 use hickory_proto::op::ResponseCode;
 use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{DNSClass, Name, RData, RecordType};
-use hickory_proto::tcp::TcpClientStream;
-use hickory_proto::udp::UdpClientStream;
-use hickory_proto::xfer::{DnsMultiplexer, DnsRequestSender};
 
 fn find_test_port() -> u16 {
     let server = std::net::UdpSocket::bind(("0.0.0.0", 0)).unwrap();
@@ -104,7 +105,7 @@ fn hickory_process() -> (NamedProcess, u16) {
 /// Runs the bench tesk using the specified client
 fn bench<S: DnsRequestSender>(
     b: &mut Bencher,
-    stream: impl Future<Output = Result<S, io::Error>> + 'static + Send + Unpin,
+    stream: impl Future<Output = Result<S, NetError>> + 'static + Send + Unpin,
 ) {
     let io_loop = Runtime::new().unwrap();
     let client = Client::<TokioRuntimeProvider>::connect(stream);

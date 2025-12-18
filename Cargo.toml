@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/net",
     "crates/proto",
     "crates/resolver",
     "crates/server",
@@ -26,6 +27,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # hickory
+hickory-net = { version = "0.26.0-alpha.1", path = "crates/net", default-features = false }
 hickory-resolver = { version = "0.26.0-alpha.1", path = "crates/resolver", default-features = false }
 hickory-server = { version = "0.26.0-alpha.1", path = "crates/server", default-features = false }
 hickory-proto = { version = "0.26.0-alpha.1", path = "crates/proto", default-features = false, features = ["std"] }
@@ -83,7 +85,6 @@ http = "1.1"
 critical-section = { version = "1.1.1" }
 
 # others
-backtrace = "0.3.50"
 bitflags = "2.4.1"
 bytes = "1"
 cfg-if = "1"
@@ -130,4 +131,22 @@ opt-level = 3
 strip = "symbols"
 
 [workspace.lints.rust]
+non_snake_case = "warn"
+non_upper_case_globals = "warn"
+rust_2018_idioms = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(nightly)'] }
+unnameable_types = "warn"
+unreachable_pub = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+bool_to_int_with_if = "allow"
+default_trait_access = "warn"
+manual_let_else = "warn"
+or_fun_call = "warn"
+single_component_path_imports = "allow"
+unimplemented = "warn"
+upper_case_acronyms = "allow"
+use_self = "warn"

@@ -7,24 +7,12 @@
 
 //! A recursive DNS resolver based on the Hickory DNS (stub) resolver
 
-#![warn(
-    clippy::default_trait_access,
-    clippy::dbg_macro,
-    clippy::print_stdout,
-    clippy::unimplemented,
-    missing_copy_implementations,
-    missing_docs,
-    non_snake_case,
-    non_upper_case_globals,
-    rust_2018_idioms,
-    unreachable_pub
-)]
-#![allow(
-    clippy::single_component_path_imports,
-    clippy::upper_case_acronyms, // can be removed on a major release boundary
-)]
-#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
-
+#[cfg(feature = "serde")]
+use std::{
+    borrow::Cow,
+    fs,
+    path::{Path, PathBuf},
+};
 use std::{
     collections::HashSet,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -33,35 +21,42 @@ use std::{
 };
 
 use ipnet::IpNet;
+#[cfg(feature = "serde")]
+use serde::Deserialize;
 use tracing::warn;
 
 #[cfg(feature = "tokio")]
-use crate::proto::runtime::TokioRuntimeProvider;
+use crate::net::runtime::TokioRuntimeProvider;
+#[cfg(feature = "serde")]
+use crate::proto::{
+    rr::{RData, Record, RecordSet},
+    serialize::txt::{ParseError, Parser},
+};
 use crate::{
     ConnectionProvider, NameServerTransportState, PoolContext, TlsConfig, TtlConfig,
     config::OpportunisticEncryption,
     proto::{
-        access_control::{AccessControlSet, AccessControlSetBuilder},
         op::{Message, Query},
-        rr::{Name, Record},
+        rr::Name,
     },
 };
 #[cfg(feature = "__dnssec")]
 use crate::{
     ResponseCache,
-    proto::{
+    net::{
         DnsError, NetError, NoRecords,
-        dnssec::{DnssecDnsHandle, TrustAnchors},
+        dnssec::DnssecDnsHandle,
+        xfer::{DnsHandle as _, FirstAnswer as _},
+    },
+    proto::{
+        dnssec::TrustAnchors,
         op::{DnsRequestOptions, ResponseCode},
         rr::RecordType,
-        xfer::{DnsHandle as _, FirstAnswer as _},
     },
 };
 
-pub use hickory_proto as proto;
-
 mod error;
-pub use error::{Error, ErrorKind};
+pub use error::{AuthorityData, RecursorError};
 
 mod handle;
 use handle::RecursorDnsHandle;
@@ -79,20 +74,103 @@ pub struct Recursor<P: ConnectionProvider> {
 }
 
 #[cfg(feature = "tokio")]
-impl Recursor<TokioRuntimeProvider> {
-    /// Construct a new [`Recursor`] via the [`RecursorBuilder`].
-    ///
-    /// This uses the Tokio async runtime. To use a different runtime provider, see
-    /// [`Recursor::builder_with_provider`].
-    pub fn builder() -> RecursorBuilder<TokioRuntimeProvider> {
-        RecursorBuilder::new(TokioRuntimeProvider::default())
-    }
-}
+impl Recursor<TokioRuntimeProvider> {}
 
 impl<P: ConnectionProvider> Recursor<P> {
-    /// Construct a new [`Recursor`] via the [`RecursorBuilder`].
-    pub fn builder_with_provider(conn_provider: P) -> RecursorBuilder<P> {
-        RecursorBuilder::new(conn_provider)
+    /// Build a new [`Recursor`] from the specified configuration
+    #[cfg(feature = "serde")]
+    pub fn from_config(
+        config: &RecursiveConfig,
+        root_dir: Option<&Path>,
+        conn_provider: P,
+    ) -> Result<Self, RecursorError> {
+        let dnssec_policy =
+            DnssecPolicy::from_config(&config.dnssec_policy).map_err(|e| e.to_string())?;
+
+        #[allow(unused_mut, unused_assignments)]
+        let mut encrypted_transport_state = None;
+        #[cfg(all(feature = "toml", any(feature = "__tls", feature = "__quic")))]
+        {
+            // Before building the recursor, potentially load some pre-existing opportunistic encrypted
+            // nameserver state to configure on the builder.
+            encrypted_transport_state =
+                config.options.opportunistic_encryption.persisted_state()?;
+        }
+
+        let path = match root_dir {
+            Some(root_dir) => Cow::Owned(root_dir.join(&config.roots)),
+            None => Cow::Borrowed(&config.roots),
+        };
+
+        let roots_str = fs::read_to_string(path.as_ref())?;
+        let (_zone, roots_zone) =
+            Parser::new(roots_str, Some(path.into_owned()), Some(Name::root()))
+                .parse()
+                .map_err(|e| format!("failed to read roots {}: {e}", config.roots.display()))?;
+
+        let root_addrs = roots_zone
+            .values()
+            .flat_map(RecordSet::records_without_rrsigs)
+            .map(Record::data)
+            .filter_map(RData::ip_addr) // we only want IPs
+            .collect::<Vec<_>>();
+
+        Self::new(
+            &root_addrs,
+            dnssec_policy,
+            encrypted_transport_state,
+            config.options.clone(),
+            conn_provider,
+        )
+    }
+
+    /// Build a DNSSEC-unaware [`Recursor`] without any name server transport state
+    pub fn with_options(
+        roots: &[IpAddr],
+        options: RecursorOptions,
+        conn_provider: P,
+    ) -> Result<Self, RecursorError> {
+        Self::new(roots, DnssecPolicy::default(), None, options, conn_provider)
+    }
+
+    /// Build a new [`Recursor`]
+    pub fn new(
+        roots: &[IpAddr],
+        dnssec_policy: DnssecPolicy,
+        encrypted_transport_state: Option<NameServerTransportState>,
+        options: RecursorOptions,
+        conn_provider: P,
+    ) -> Result<Self, RecursorError> {
+        let mut tls_config = TlsConfig::new()?;
+        if options.opportunistic_encryption.is_enabled() {
+            warn!("disabling TLS peer verification for opportunistic encryption mode");
+            tls_config.insecure_skip_verify();
+        }
+
+        #[cfg(feature = "__dnssec")]
+        let response_cache_size = options.response_cache_size;
+        #[cfg(feature = "__dnssec")]
+        let ttl_config = options.cache_policy.clone();
+        let handle = RecursorDnsHandle::new(
+            roots,
+            dnssec_policy.clone(),
+            encrypted_transport_state,
+            options,
+            tls_config,
+            conn_provider,
+        )?;
+
+        Ok(Self {
+            mode: match dnssec_policy {
+                DnssecPolicy::SecurityUnaware => RecursorMode::NonValidating { handle },
+                #[cfg(feature = "__dnssec")]
+                DnssecPolicy::ValidationDisabled => RecursorMode::NonValidating { handle },
+                #[cfg(feature = "__dnssec")]
+                DnssecPolicy::ValidateWithStaticKey(config) => RecursorMode::Validating(
+                    ValidatingRecursor::new(handle, config, response_cache_size, ttl_config)?,
+                ),
+            },
+        })
     }
 
     /// Perform a recursive resolution
@@ -261,9 +339,11 @@ impl<P: ConnectionProvider> Recursor<P> {
         query: Query,
         request_time: Instant,
         query_has_dnssec_ok: bool,
-    ) -> Result<Message, Error> {
+    ) -> Result<Message, RecursorError> {
         if !query.name().is_fqdn() {
-            return Err(Error::from("query's domain name must be fully qualified"));
+            return Err(RecursorError::from(
+                "query's domain name must be fully qualified",
+            ));
         }
 
         match &self.mode {
@@ -330,11 +410,11 @@ impl<P: ConnectionProvider> ValidatingRecursor<P> {
         config: DnssecConfig,
         response_cache_size: u64,
         ttl_config: TtlConfig,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, RecursorError> {
         let validated_response_cache = ResponseCache::new(response_cache_size, ttl_config.clone());
         let trust_anchor = match config.trust_anchor {
             Some(anchor) if anchor.is_empty() => {
-                return Err(Error::from("trust anchor must not be empty"));
+                return Err(RecursorError::from("trust anchor must not be empty"));
             }
             Some(anchor) => anchor,
             None => Arc::new(TrustAnchors::default()),
@@ -368,7 +448,7 @@ impl<P: ConnectionProvider> ValidatingRecursor<P> {
         query: Query,
         request_time: Instant,
         query_has_dnssec_ok: bool,
-    ) -> Result<Message, Error> {
+    ) -> Result<Message, RecursorError> {
         if let Some(Ok(response)) = self.validated_response_cache.get(&query, request_time) {
             // Increment metrics on cache hits only. We will check the cache a second time
             // inside resolve(), thus we only track cache misses there.
@@ -382,11 +462,7 @@ impl<P: ConnectionProvider> ValidatingRecursor<P> {
             // if the cached response is a referral, or if any record is indeterminate, fall
             // through and perform DNSSEC validation
             if response.authoritative() && none_indeterminate {
-                return Ok(maybe_strip_dnssec_records(
-                    query_has_dnssec_ok,
-                    response,
-                    query,
-                ));
+                return Ok(response.maybe_strip_dnssec_records(query_has_dnssec_ok));
             }
         }
 
@@ -406,19 +482,15 @@ impl<P: ConnectionProvider> ValidatingRecursor<P> {
         // to preserve SOA and DNSSEC records, and to keep those records in the authorities
         // section of the response.
         if response.response_code() == ResponseCode::NXDomain {
-            use crate::recursor::ErrorKind;
+            use crate::recursor::RecursorError;
 
             let Err(dns_error) = DnsError::from_response(response) else {
-                return Err(Error::from(
+                return Err(RecursorError::from(
                     "unable to build ProtoError from response {response:?}",
                 ));
             };
 
-            Err(Error {
-                kind: ErrorKind::Net(NetError::from(dns_error)),
-                #[cfg(feature = "backtrace")]
-                backtrack: None,
-            })
+            Err(RecursorError::Net(NetError::from(dns_error)))
         } else if response.answers().is_empty()
             && !response.authorities().is_empty()
             && response.response_code() == ResponseCode::NoError
@@ -439,251 +511,150 @@ impl<P: ConnectionProvider> ValidatingRecursor<P> {
                     .collect(),
             );
 
-            Err(Error::from(NetError::from(no_records)))
+            Err(RecursorError::from(NetError::from(no_records)))
         } else {
             let message = response.into_message();
             self.validated_response_cache
                 .insert(query.clone(), Ok(message.clone()), request_time);
-            Ok(maybe_strip_dnssec_records(
-                query_has_dnssec_ok,
-                message,
-                query,
-            ))
+            Ok(message.maybe_strip_dnssec_records(query_has_dnssec_ok))
         }
     }
 }
 
-/// A `Recursor` builder
-pub struct RecursorBuilder<P: ConnectionProvider> {
-    pub(super) ns_cache_size: usize,
-    pub(super) response_cache_size: u64,
-    /// This controls how many nested lookups will be attempted to resolve a CNAME chain. Setting it
-    /// to None will disable the recursion limit check, and is not recommended.
-    pub(super) recursion_limit: Option<u8>,
-    /// This controls how many nested lookups will be attempted when trying to build an NS pool.
-    /// Setting it to None will disable the recursion limit check, and is not recommended.
-    pub(super) ns_recursion_limit: Option<u8>,
-    pub(super) dnssec_policy: DnssecPolicy,
-    pub(super) answer_address_filter: AccessControlSet,
-    pub(super) name_server_filter: AccessControlSet,
-    pub(super) avoid_local_udp_ports: HashSet<u16>,
-    pub(super) ttl_config: TtlConfig,
-    pub(super) case_randomization: bool,
-    pub(super) opportunistic_encryption: OpportunisticEncryption,
-    pub(super) encrypted_transport_state: NameServerTransportState,
-    pub(super) conn_provider: P,
+/// Configuration for recursive resolver zones
+#[cfg(feature = "serde")]
+#[derive(Clone, Deserialize, Eq, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct RecursiveConfig {
+    /// File with roots, aka hints
+    pub roots: PathBuf,
+    /// DNSSEC policy
+    #[serde(default)]
+    pub dnssec_policy: DnssecPolicyConfig,
+    /// Options for the recursor
+    #[serde(flatten)]
+    pub options: RecursorOptions,
 }
 
-impl<P: ConnectionProvider> RecursorBuilder<P> {
-    fn new(conn_provider: P) -> Self {
-        Self {
-            ns_cache_size: 1_024,
-            response_cache_size: 1_048_576,
-            recursion_limit: Some(24),
-            ns_recursion_limit: Some(24),
-            dnssec_policy: DnssecPolicy::SecurityUnaware,
-            answer_address_filter: AccessControlSetBuilder::new("answers")
-                .allow([].iter() /* no recommended exceptions */)
-                .deny([].iter() /* no recommeneded default filters */)
-                .build(),
-            name_server_filter: AccessControlSetBuilder::new("name_servers")
-                .allow([].iter() /* no recommended exceptions */)
-                .deny(RECOMMENDED_SERVER_FILTERS.iter())
-                .build(),
-            avoid_local_udp_ports: HashSet::new(),
-            ttl_config: TtlConfig::default(),
-            case_randomization: false,
-            opportunistic_encryption: OpportunisticEncryption::default(),
-            encrypted_transport_state: NameServerTransportState::default(),
-            conn_provider,
-        }
-    }
+/// Options for the [`Recursor`]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[derive(Clone, Eq, PartialEq, Debug)]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+pub struct RecursorOptions {
+    /// Maximum nameserver cache size
+    #[cfg_attr(feature = "serde", serde(default = "default_ns_cache_size"))]
+    pub ns_cache_size: usize,
 
-    /// Sets the size of the list of cached name servers
-    pub fn ns_cache_size(mut self, size: usize) -> Self {
-        self.ns_cache_size = size;
-        self
-    }
+    /// Maximum DNS response cache size
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "default_response_cache_size", alias = "record_cache_size")
+    )]
+    pub response_cache_size: u64,
 
-    /// Sets the size of the list of cached responses
-    pub fn response_cache_size(mut self, size: u64) -> Self {
-        self.response_cache_size = size;
-        self
-    }
-
-    /// Sets the maximum recursion depth for queries; set to None for unlimited
-    /// recursion.
-    pub fn recursion_limit(mut self, limit: Option<u8>) -> Self {
-        self.recursion_limit = limit;
-        self
-    }
-
-    /// Sets the maximum recursion depth for building NS pools; set to None for unlimited
-    /// recursion.
-    pub fn ns_recursion_limit(mut self, limit: Option<u8>) -> Self {
-        self.ns_recursion_limit = limit;
-        self
-    }
-
-    /// Sets the DNSSEC policy
-    pub fn dnssec_policy(mut self, dnssec_policy: DnssecPolicy) -> Self {
-        self.dnssec_policy = dnssec_policy;
-        self
-    }
-
-    /// Allow listed addresses in responses during recursive resolution.
+    /// Maximum recursion depth for queries
     ///
-    /// The provided `allow` networks will be added to any existing networks that were added by
-    /// previous calls to [`Self::answer_address_filter_allow`].
-    ///
-    /// Allowed networks take precedence over deny networks added with [`Self::answer_address_filter_deny`].
-    pub fn answer_address_filter_allow<'a>(
-        mut self,
-        allow: impl Iterator<Item = &'a IpNet>,
-    ) -> Self {
-        self.answer_address_filter.allow(allow);
-        self
-    }
+    /// Setting to 0 will fail all requests requiring recursion.
+    #[cfg_attr(feature = "serde", serde(default = "recursion_limit_default"))]
+    pub recursion_limit: u8,
 
-    /// Deny listed addresses in responses during recursive resolution.
+    /// Maximum recursion depth for building NS pools
     ///
-    /// The provided `deny` networks will be added to any existing networks denied
-    /// by default, or that were added by previous calls to [`Self::answer_address_filter_deny`].
-    pub fn answer_address_filter_deny<'a>(mut self, deny: impl Iterator<Item = &'a IpNet>) -> Self {
-        self.answer_address_filter.deny(deny);
-        self
-    }
+    /// Setting to 0 will fail all requests requiring recursion.
+    #[cfg_attr(feature = "serde", serde(default = "ns_recursion_limit_default"))]
+    pub ns_recursion_limit: u8,
 
-    /// Clear the networks that should be allowed as answers during recursive resolution.
-    ///
-    /// This will remove any allow filter networks previously added by [`Self::answer_address_filter_allow`],
-    pub fn clear_answer_address_filter_allow(mut self) -> Self {
-        self.answer_address_filter.clear_allow();
-        self
-    }
+    /// Networks that will not be filtered from responses.  This overrides anything present in
+    /// deny_answers
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub allow_answers: Vec<IpNet>,
 
-    /// Clear the networks that should not be allowed as answers during recursive resolution.
-    ///
-    /// This will remove any deny filter networks previously added by [`Self::answer_address_filter_deny`].
-    pub fn clear_answer_address_filter_deny(mut self) -> Self {
-        self.answer_address_filter.clear_deny();
-        self
-    }
+    /// Networks that will be filtered from responses
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub deny_answers: Vec<IpNet>,
 
-    /// Skip querying nameservers within the provided networks during recursive resolution.
-    ///
-    /// The provided `deny` networks will be added to any existing networks denied
-    /// by default, or that were added by previous calls to [`Self::deny_servers`].
-    pub fn deny_servers<'a>(mut self, deny: impl Iterator<Item = &'a IpNet>) -> Self {
-        self.name_server_filter.deny(deny);
-        self
-    }
+    /// Networks that will be queried during resolution
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub allow_server: Vec<IpNet>,
 
-    /// Allow querying nameservers within the provided networks during recursive resolution.
-    ///
-    /// The provided `allow` networks will be added to any existing networks that were added by
-    /// previous calls to [`Self::allow_servers`].
-    ///
-    /// Allowed networks take precedence over deny networks added with [`Self::deny_servers`].
-    pub fn allow_servers<'a>(mut self, allow: impl Iterator<Item = &'a IpNet>) -> Self {
-        self.name_server_filter.allow(allow);
-        self
-    }
+    /// Networks that will not be queried during resolution
+    #[cfg_attr(feature = "serde", serde(default = "deny_server_default"))]
+    pub deny_server: Vec<IpNet>,
 
-    /// Clear the networks that should be allowed to be queried during recursive resolution.
-    ///
-    /// This will remove any allow filter networks previously added by [`Self::allow_servers`],
-    pub fn clear_allow_servers(mut self) -> Self {
-        self.name_server_filter.clear_allow();
-        self
-    }
+    /// Local UDP ports to avoid when making outgoing queries
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub avoid_local_udp_ports: HashSet<u16>,
 
-    /// Clear the networks that should not be queried during recursive resolution.
-    ///
-    /// This will remove any deny filter networks previously added by [`Self::deny_servers`],
-    /// as well as the default recommended server filters (internal networks, broadcast addresses,
-    /// etc.).
-    pub fn clear_deny_servers(mut self) -> Self {
-        self.name_server_filter.clear_deny();
-        self
-    }
-
-    /// Sets local UDP ports that should be avoided when making outgoing queries
-    pub fn avoid_local_udp_ports(mut self, ports: HashSet<u16>) -> Self {
-        self.avoid_local_udp_ports = ports;
-        self
-    }
-
-    /// Sets the minimum and maximum TTL values for cached responses
-    pub fn ttl_config(mut self, ttl_config: TtlConfig) -> Self {
-        self.ttl_config = ttl_config;
-        self
-    }
+    /// Caching policy, setting minimum and maximum TTLs
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub cache_policy: TtlConfig,
 
     /// Enable case randomization.
     ///
-    /// Sets whether to randomize the case of letters in query names, and require that responses
-    /// preserve the case.
-    pub fn case_randomization(mut self, case_randomization: bool) -> Self {
-        self.case_randomization = case_randomization;
-        self
-    }
-
-    /// Configure RFC9539 opportunistic encryption.
-    pub fn opportunistic_encryption(mut self, config: OpportunisticEncryption) -> Self {
-        self.opportunistic_encryption = config;
-        self
-    }
-
-    /// Load pre-existing encrypted transport state for use with opportunistic encryption.
-    pub fn encrypted_transport_state(
-        mut self,
-        encrypted_transport_state: NameServerTransportState,
-    ) -> Self {
-        self.encrypted_transport_state = encrypted_transport_state;
-        self
-    }
-
-    /// Construct a new recursor using the list of root zone name server addresses
+    /// Randomize the case of letters in query names, and require that responses preserve the case
+    /// of the query name, in order to mitigate spoofing attacks. This is only applied over UDP.
     ///
-    /// # Panics
-    ///
-    /// This will panic if the roots are empty.
-    pub fn build(self, roots: &[IpAddr]) -> Result<Recursor<P>, Error> {
-        let mut tls_config = TlsConfig::new()?;
-        if self.opportunistic_encryption.is_enabled() {
-            warn!("disabling TLS peer verification for opportunistic encryption mode");
-            tls_config.insecure_skip_verify();
+    /// This implements the mechanism described in
+    /// [draft-vixie-dnsext-dns0x20-00](https://datatracker.ietf.org/doc/html/draft-vixie-dnsext-dns0x20-00).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub case_randomization: bool,
+
+    /// Configure RFC 9539 opportunistic encryption.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub opportunistic_encryption: OpportunisticEncryption,
+}
+
+impl Default for RecursorOptions {
+    fn default() -> Self {
+        Self {
+            ns_cache_size: 1_024,
+            response_cache_size: 1_048_576,
+            recursion_limit: 24,
+            ns_recursion_limit: 24,
+            allow_answers: Vec::new(),
+            deny_answers: Vec::new(),
+            allow_server: Vec::new(),
+            deny_server: RECOMMENDED_SERVER_FILTERS.to_vec(),
+            avoid_local_udp_ports: HashSet::new(),
+            cache_policy: TtlConfig::default(),
+            case_randomization: false,
+            opportunistic_encryption: OpportunisticEncryption::default(),
         }
-
-        let dnssec_policy = self.dnssec_policy.clone();
-        #[cfg(feature = "__dnssec")]
-        let response_cache_size = self.response_cache_size;
-        #[cfg(feature = "__dnssec")]
-        let ttl_config = self.ttl_config.clone();
-        let handle = RecursorDnsHandle::new(roots, tls_config, self)?;
-
-        Ok(Recursor {
-            mode: match dnssec_policy {
-                DnssecPolicy::SecurityUnaware => RecursorMode::NonValidating { handle },
-                #[cfg(feature = "__dnssec")]
-                DnssecPolicy::ValidationDisabled => RecursorMode::NonValidating { handle },
-                #[cfg(feature = "__dnssec")]
-                DnssecPolicy::ValidateWithStaticKey(config) => RecursorMode::Validating(
-                    ValidatingRecursor::new(handle, config, response_cache_size, ttl_config)?,
-                ),
-            },
-        })
     }
+}
+
+#[cfg(feature = "serde")]
+fn default_ns_cache_size() -> usize {
+    1_024
+}
+
+#[cfg(feature = "serde")]
+fn default_response_cache_size() -> u64 {
+    1_048_576
+}
+
+#[cfg(feature = "serde")]
+fn recursion_limit_default() -> u8 {
+    24
+}
+
+#[cfg(feature = "serde")]
+fn ns_recursion_limit_default() -> u8 {
+    24
+}
+
+#[cfg(feature = "serde")]
+fn deny_server_default() -> Vec<IpNet> {
+    RECOMMENDED_SERVER_FILTERS.to_vec()
 }
 
 /// `Recursor`'s DNSSEC policy
 // `Copy` can only be implemented when `dnssec` is disabled we don't want to remove a trait
 // implementation when a feature is enabled as features are meant to be additive
-#[allow(missing_copy_implementations)]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum DnssecPolicy {
     /// security unaware; DNSSEC records will not be requested nor processed
+    #[default]
     SecurityUnaware,
 
     /// DNSSEC validation is disabled; DNSSEC records will be requested and processed
@@ -698,6 +669,31 @@ pub enum DnssecPolicy {
 }
 
 impl DnssecPolicy {
+    #[cfg(feature = "serde")]
+    fn from_config(config: &DnssecPolicyConfig) -> Result<Self, ParseError> {
+        Ok(match config {
+            DnssecPolicyConfig::SecurityUnaware => Self::SecurityUnaware,
+            #[cfg(feature = "__dnssec")]
+            DnssecPolicyConfig::ValidationDisabled => Self::ValidationDisabled,
+            #[cfg(feature = "__dnssec")]
+            DnssecPolicyConfig::ValidateWithStaticKey {
+                path,
+                nsec3_soft_iteration_limit,
+                nsec3_hard_iteration_limit,
+                validation_cache_size,
+            } => Self::ValidateWithStaticKey(DnssecConfig {
+                trust_anchor: path
+                    .as_ref()
+                    .map(|path| TrustAnchors::from_file(path))
+                    .transpose()?
+                    .map(Arc::new),
+                nsec3_soft_iteration_limit: *nsec3_soft_iteration_limit,
+                nsec3_hard_iteration_limit: *nsec3_hard_iteration_limit,
+                validation_cache_size: *validation_cache_size,
+            }),
+        })
+    }
+
     pub(crate) fn is_security_aware(&self) -> bool {
         !matches!(self, Self::SecurityUnaware)
     }
@@ -721,26 +717,35 @@ pub struct DnssecConfig {
     pub validation_cache_size: Option<usize>,
 }
 
-// as per section 3.2.1 of RFC4035
-fn maybe_strip_dnssec_records(
-    query_has_dnssec_ok: bool,
-    mut response: Message,
-    query: Query,
-) -> Message {
-    if query_has_dnssec_ok {
-        return response;
-    }
+/// DNSSEC policy configuration
+#[cfg(feature = "serde")]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub enum DnssecPolicyConfig {
+    /// security unaware; DNSSEC records will not be requested nor processed
+    #[default]
+    SecurityUnaware,
 
-    let predicate = |record: &Record| {
-        let record_type = record.record_type();
-        record_type == query.query_type() || !record_type.is_dnssec()
-    };
+    /// DNSSEC validation is disabled; DNSSEC records will be requested and processed
+    #[cfg(feature = "__dnssec")]
+    ValidationDisabled,
 
-    response.answers_mut().retain(predicate);
-    response.authorities_mut().retain(predicate);
-    response.additionals_mut().retain(predicate);
-
-    response
+    /// DNSSEC validation is enabled and will use the chosen `trust_anchor` set of keys
+    #[cfg(feature = "__dnssec")]
+    ValidateWithStaticKey {
+        /// set to `None` to use built-in trust anchor
+        path: Option<PathBuf>,
+        /// set to control the 'soft' NSEC3 iteration limit. Responses where valid NSEC3 records are
+        /// returned having an iteration count above this limit, but below the hard limit, will
+        /// be considered insecure (answered without the AD bit set.)
+        nsec3_soft_iteration_limit: Option<u16>,
+        /// set to control the 'hard' NSEC3 iteration limit. Responses where valid NSEC3 records are
+        /// returned having an iteration count above this limit will be considered Bogus and will
+        /// result in a SERVFAIL response being returned to the requester.
+        nsec3_hard_iteration_limit: Option<u16>,
+        /// set to control the size of the DNSSEC validation cache.  Set to none to use the default
+        validation_cache_size: Option<usize>,
+    },
 }
 
 /// Bailiwick/sub zone checking.

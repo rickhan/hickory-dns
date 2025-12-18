@@ -7,19 +7,6 @@
 
 //! The dns client program
 
-// BINARY WARNINGS
-#![warn(
-    clippy::default_trait_access,
-    clippy::dbg_macro,
-    clippy::unimplemented,
-    missing_copy_implementations,
-    missing_docs,
-    non_snake_case,
-    non_upper_case_globals,
-    rust_2018_idioms,
-    unreachable_pub
-)]
-
 use std::net::SocketAddr;
 #[cfg(feature = "__tls")]
 use std::sync::Arc;
@@ -34,17 +21,20 @@ use rustls::{
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
 
+#[cfg(feature = "__https")]
+use hickory_net::h2::HttpsClientStreamBuilder;
+#[cfg(feature = "__h3")]
+use hickory_net::h3::H3ClientStream;
+#[cfg(feature = "__quic")]
+use hickory_net::quic::QuicClientStream;
 #[cfg(any(feature = "__tls", feature = "__https"))]
-use hickory_proto::rustls::client_config;
+use hickory_net::rustls::client_config;
 #[cfg(feature = "__tls")]
-use hickory_proto::rustls::tls_client_connect;
-use hickory_proto::{
+use hickory_net::rustls::tls_client_connect;
+use hickory_net::{
     NetError,
     client::{Client, ClientHandle},
-    op::DnsResponse,
-    rr::{DNSClass, Name, RData, RecordSet, RecordType},
     runtime::{RuntimeProvider, TokioRuntimeProvider},
-    serialize::txt::RDataParser,
     tcp::TcpClientStream,
     udp::UdpClientStream,
 };
@@ -52,6 +42,11 @@ use hickory_proto::{
 use hickory_proto::{
     dnssec::{Algorithm, PublicKey, TrustAnchors, Verifier, rdata::DNSKEY},
     rr::Record,
+};
+use hickory_proto::{
+    op::DnsResponse,
+    rr::{DNSClass, Name, RData, RecordSet, RecordType},
+    serialize::txt::RDataParser,
 };
 
 /// A CLI interface for the hickory-client.
@@ -491,7 +486,7 @@ async fn tls<P: RuntimeProvider>(
 
     let mut config = client_config()?;
     if opts.do_not_verify_nameserver_cert {
-        self::do_not_verify_nameserver_cert(&mut config);
+        do_not_verify_nameserver_cert(&mut config);
     }
     if let Some(alpn) = alpn {
         config.alpn_protocols.push(alpn);
@@ -523,8 +518,6 @@ async fn https<P: RuntimeProvider>(
     opts: Opts,
     provider: P,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use hickory_proto::h2::HttpsClientStreamBuilder;
-
     let nameserver = opts.nameserver;
     let alpn = opts
         .alpn
@@ -540,7 +533,7 @@ async fn https<P: RuntimeProvider>(
 
     let mut config = client_config()?;
     if opts.do_not_verify_nameserver_cert {
-        self::do_not_verify_nameserver_cert(&mut config);
+        do_not_verify_nameserver_cert(&mut config);
     }
     config.alpn_protocols.push(alpn);
     let config = Arc::new(config);
@@ -567,8 +560,6 @@ async fn quic(_opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(feature = "__quic")]
 async fn quic(opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
-    use hickory_proto::quic::QuicClientStream;
-
     let nameserver = opts.nameserver;
     let alpn = opts
         .alpn
@@ -581,7 +572,7 @@ async fn quic(opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut config = client_config()?;
     if opts.do_not_verify_nameserver_cert {
-        self::do_not_verify_nameserver_cert(&mut config);
+        do_not_verify_nameserver_cert(&mut config);
     }
     config.alpn_protocols.push(alpn);
 
@@ -606,8 +597,6 @@ async fn h3(_opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(feature = "__h3")]
 async fn h3(opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
-    use hickory_proto::h3::H3ClientStream;
-
     let nameserver = opts.nameserver;
     let alpn = opts
         .alpn
@@ -623,7 +612,7 @@ async fn h3(opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut config = client_config()?;
     if opts.do_not_verify_nameserver_cert {
-        self::do_not_verify_nameserver_cert(&mut config);
+        do_not_verify_nameserver_cert(&mut config);
     }
     config.alpn_protocols.push(alpn);
 

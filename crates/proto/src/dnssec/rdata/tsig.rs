@@ -8,6 +8,7 @@
 //! TSIG for secret key authentication of transaction
 #![allow(clippy::use_self)]
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::{convert::TryInto, fmt};
 
@@ -18,7 +19,7 @@ use super::DNSSECRData;
 use crate::dnssec::tsig::TSigner;
 use crate::op::MessageSignature;
 use crate::{
-    dnssec::{DnsSecError, DnsSecErrorKind, ring_like::hmac},
+    dnssec::{DnsSecError, ring_like::hmac},
     error::{ProtoError, ProtoResult},
     op::{Header, Message, Query},
     rr::{
@@ -571,7 +572,7 @@ impl TsigAlgorithm {
             HmacSha256 => hmac::Key::new(hmac::HMAC_SHA256, key),
             HmacSha384 => hmac::Key::new(hmac::HMAC_SHA384, key),
             HmacSha512 => hmac::Key::new(hmac::HMAC_SHA512, key),
-            _ => return Err(DnsSecErrorKind::TsigUnsupportedMacAlgorithm(self.clone()).into()),
+            _ => return Err(DnsSecError::TsigUnsupportedMacAlgorithm(self.clone())),
         };
 
         let mac = hmac::sign(&key, message);
@@ -590,10 +591,10 @@ impl TsigAlgorithm {
             HmacSha256 => hmac::Key::new(hmac::HMAC_SHA256, key),
             HmacSha384 => hmac::Key::new(hmac::HMAC_SHA384, key),
             HmacSha512 => hmac::Key::new(hmac::HMAC_SHA512, key),
-            _ => return Err(DnsSecErrorKind::TsigUnsupportedMacAlgorithm(self.clone()).into()),
+            _ => return Err(DnsSecError::TsigUnsupportedMacAlgorithm(self.clone())),
         };
 
-        hmac::verify(&key, message, tag).map_err(|_| DnsSecErrorKind::HmacInvalid.into())
+        hmac::verify(&key, message, tag).map_err(|_| DnsSecError::HmacInvalid)
     }
 
     /// Return length in bytes of the algorithms output
@@ -604,7 +605,7 @@ impl TsigAlgorithm {
             HmacSha256 => hmac::HMAC_SHA256.digest_algorithm().output_len(),
             HmacSha384 => hmac::HMAC_SHA384.digest_algorithm().output_len(),
             HmacSha512 => hmac::HMAC_SHA512.digest_algorithm().output_len(),
-            _ => return Err(DnsSecErrorKind::TsigUnsupportedMacAlgorithm(self.clone()).into()),
+            _ => return Err(DnsSecError::TsigUnsupportedMacAlgorithm(self.clone())),
         };
 
         Ok(len)
@@ -721,7 +722,7 @@ pub fn signed_bitmessage_to_buf(
     message: &[u8],
     previous_hash: Option<&[u8]>,
     first_message: bool,
-) -> ProtoResult<(Vec<u8>, Record<TSIG>)> {
+) -> ProtoResult<(Vec<u8>, Box<Record<TSIG>>)> {
     let mut decoder = BinDecoder::new(message);
     let mut header = Header::read(&mut decoder)?;
 
@@ -896,7 +897,9 @@ mod tests {
 
         let pre_tsig = pre_tsig.set_mac(b"some signature".to_vec());
 
-        message.set_signature(MessageSignature::Tsig(make_tsig_record(key_name, pre_tsig)));
+        message.set_signature(MessageSignature::Tsig(Box::new(make_tsig_record(
+            key_name, pre_tsig,
+        ))));
 
         let message_byte = message.to_bytes().unwrap();
 
@@ -928,7 +931,9 @@ mod tests {
 
         let pre_tsig = pre_tsig.set_mac(b"some signature".to_vec());
 
-        message.set_signature(MessageSignature::Tsig(make_tsig_record(key_name, pre_tsig)));
+        message.set_signature(MessageSignature::Tsig(Box::new(make_tsig_record(
+            key_name, pre_tsig,
+        ))));
 
         let message_byte = message.to_bytes().unwrap();
         let mut message = Message::from_bytes(&message_byte).unwrap();

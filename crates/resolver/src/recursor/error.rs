@@ -9,24 +9,26 @@
 
 #![deny(missing_docs)]
 
-use std::{fmt, io, sync::Arc};
+use std::io;
+use std::sync::Arc;
 
 use thiserror::Error;
 use tracing::warn;
 
-use crate::proto::{
-    DnsError, ForwardNSData, NetError, NetErrorKind, NoRecords, ProtoError,
-    op::Query,
-    op::ResponseCode,
-    rr::{Name, Record, RecordType, rdata::SOA},
+use crate::{
+    net::{DnsError, ForwardNSData, NetError, NoRecords},
+    proto::{
+        ProtoError,
+        op::Query,
+        op::ResponseCode,
+        rr::{Name, Record, RecordType, rdata::SOA},
+    },
 };
-#[cfg(feature = "backtrace")]
-use crate::proto::{ExtBacktrace, trace};
 
 /// The error kind for errors that get returned in the crate
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum ErrorKind {
+pub enum RecursorError {
     /// Maximum record limit was exceeded
     #[error("maximum record limit for {record_type} exceeded: {count} records")]
     MaxRecordLimitExceeded {
@@ -55,7 +57,7 @@ pub enum ErrorKind {
 
     /// An error got returned from IO
     #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// An error got returned by the hickory-proto crate
     #[error("net error: {0}")]
@@ -73,160 +75,65 @@ pub enum ErrorKind {
     },
 }
 
-/// The error type for errors that get returned in the crate
-#[derive(Error, Clone, Debug)]
-#[non_exhaustive]
-pub struct Error {
-    /// Kind of error that occurred
-    pub kind: ErrorKind,
-    /// Backtrace to the source of the error
-    #[cfg(feature = "backtrace")]
-    pub backtrack: Option<ExtBacktrace>,
-}
+impl RecursorError {
+    /// Test if the recursion depth has been exceeded, and return an error if it has.
+    pub fn recursion_exceeded(limit: u8, depth: u8, name: &Name) -> Result<(), Self> {
+        if depth < limit {
+            return Ok(());
+        }
 
-impl Error {
-    /// Get the kind of the error
-    pub fn kind(&self) -> &ErrorKind {
-        &self.kind
+        warn!("recursion depth exceeded for {name}");
+        Err(Self::RecursionLimitExceeded {
+            count: depth as usize,
+        })
     }
 
-    /// Take kind from the Error
-    pub fn into_kind(self) -> ErrorKind {
-        self.kind
-    }
-
-    /// Returns true if the domain does not exist
-    pub fn is_nx_domain(&self) -> bool {
-        match &self.kind {
-            ErrorKind::Net(net) => net.is_nx_domain(),
-            ErrorKind::Negative(fwd) => fwd.is_nx_domain(),
-            _ => false,
+    /// Returns the SOA record, if the error contains one
+    pub fn into_soa(self) -> Option<Box<Record<SOA>>> {
+        match self {
+            Self::Net(net) => net.into_soa(),
+            Self::Negative(fwd) => fwd.soa,
+            _ => None,
         }
     }
 
     /// Returns true if no records were returned
     pub fn is_no_records_found(&self) -> bool {
-        match &self.kind {
-            ErrorKind::Net(net) => net.is_no_records_found(),
-            ErrorKind::Negative(fwd) => fwd.is_no_records_found(),
+        match self {
+            Self::Net(net) => net.is_no_records_found(),
+            Self::Negative(fwd) => fwd.is_no_records_found(),
+            _ => false,
+        }
+    }
+
+    /// Returns true if the domain does not exist
+    pub fn is_nx_domain(&self) -> bool {
+        match self {
+            Self::Net(net) => net.is_nx_domain(),
+            Self::Negative(fwd) => fwd.is_nx_domain(),
             _ => false,
         }
     }
 
     /// Returns true if a query timed out
     pub fn is_timeout(&self) -> bool {
-        match &self.kind {
-            ErrorKind::Net(net) => matches!(net.kind, NetErrorKind::Timeout),
+        match self {
+            Self::Net(net) => matches!(net, NetError::Timeout),
             _ => false,
         }
     }
-
-    /// Returns the SOA record, if the error contains one
-    pub fn into_soa(self) -> Option<Box<Record<SOA>>> {
-        match self.kind {
-            ErrorKind::Net(net) => net.into_soa(),
-            ErrorKind::Negative(fwd) => fwd.soa,
-            _ => None,
-        }
-    }
-
-    /// Return additional records
-    pub fn authorities(self) -> Option<Arc<[Record]>> {
-        match self.kind {
-            ErrorKind::Negative(fwd) => fwd.authorities,
-            _ => None,
-        }
-    }
-
-    /// Test if the recursion depth has been exceeded, and return an error if it has.
-    pub fn recursion_exceeded(limit: Option<u8>, depth: u8, name: &Name) -> Result<(), Self> {
-        match limit {
-            Some(limit) if depth > limit => {}
-            _ => return Ok(()),
-        }
-
-        warn!("recursion depth exceeded for {name}");
-        Err(ErrorKind::RecursionLimitExceeded {
-            count: depth as usize,
-        }
-        .into())
-    }
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        cfg_if::cfg_if! {
-            if #[cfg(feature = "backtrace")] {
-                if let Some(backtrace) = &self.backtrack {
-                    fmt::Display::fmt(&self.kind, f)?;
-                    fmt::Debug::fmt(backtrace, f)
-                } else {
-                    fmt::Display::fmt(&self.kind, f)
-                }
-            } else {
-                fmt::Display::fmt(&self.kind, f)
-            }
-        }
-    }
-}
-
-impl<E> From<E> for Error
-where
-    E: Into<ErrorKind>,
-{
-    fn from(error: E) -> Self {
-        Self {
-            kind: error.into(),
-            #[cfg(feature = "backtrace")]
-            backtrack: trace!(),
-        }
-    }
-}
-
-impl From<&'static str> for Error {
-    fn from(msg: &'static str) -> Self {
-        ErrorKind::Message(msg).into()
-    }
-}
-
-impl From<String> for Error {
-    fn from(msg: String) -> Self {
-        ErrorKind::Msg(msg).into()
-    }
-}
-
-impl From<Error> for io::Error {
-    fn from(e: Error) -> Self {
-        match e.kind() {
-            ErrorKind::Timeout => Self::new(io::ErrorKind::TimedOut, e),
-            _ => Self::other(e),
-        }
-    }
-}
-
-impl From<Error> for String {
-    fn from(e: Error) -> Self {
-        e.to_string()
-    }
-}
-
-impl From<ProtoError> for Error {
-    fn from(e: ProtoError) -> Self {
-        NetError::from(e).into()
-    }
-}
-
-impl From<NetError> for Error {
+impl From<NetError> for RecursorError {
     fn from(e: NetError) -> Self {
-        let no_records = match e.kind {
-            NetErrorKind::Dns(DnsError::NoRecordsFound(no_records)) => no_records,
-            _ => return ErrorKind::Net(e).into(),
+        let NetError::Dns(DnsError::NoRecordsFound(no_records)) = e else {
+            return Self::Net(e);
         };
 
         if let Some(ns) = no_records.ns {
-            ErrorKind::ForwardNS(ns)
+            Self::ForwardNS(ns)
         } else {
-            ErrorKind::Negative(AuthorityData::new(
+            Self::Negative(AuthorityData::new(
                 no_records.query,
                 no_records.soa,
                 true,
@@ -234,13 +141,39 @@ impl From<NetError> for Error {
                 no_records.authorities,
             ))
         }
-        .into()
     }
 }
 
-impl Clone for ErrorKind {
+impl From<RecursorError> for NetError {
+    fn from(e: RecursorError) -> Self {
+        match e {
+            RecursorError::Negative(fwd) => DnsError::NoRecordsFound(fwd.into()).into(),
+            _ => Self::from(e.to_string()),
+        }
+    }
+}
+
+impl From<ProtoError> for RecursorError {
+    fn from(e: ProtoError) -> Self {
+        NetError::from(e).into()
+    }
+}
+
+impl From<String> for RecursorError {
+    fn from(msg: String) -> Self {
+        Self::Msg(msg)
+    }
+}
+
+impl From<&'static str> for RecursorError {
+    fn from(msg: &'static str) -> Self {
+        Self::Message(msg)
+    }
+}
+
+impl Clone for RecursorError {
     fn clone(&self) -> Self {
-        use self::ErrorKind::*;
+        use self::RecursorError::*;
         match self {
             MaxRecordLimitExceeded { count, record_type } => MaxRecordLimitExceeded {
                 count: *count,
@@ -250,19 +183,10 @@ impl Clone for ErrorKind {
             Msg(msg) => Msg(msg.clone()),
             Negative(ns) => Negative(ns.clone()),
             ForwardNS(ns) => ForwardNS(ns.clone()),
-            Io(io) => Io(std::io::Error::from(io.kind())),
+            Io(io) => Io(io::Error::from(io.kind())),
             Net(net) => Net(net.clone()),
             Timeout => Self::Timeout,
             RecursionLimitExceeded { count } => RecursionLimitExceeded { count: *count },
-        }
-    }
-}
-
-impl From<Error> for NetError {
-    fn from(e: Error) -> Self {
-        match e.kind {
-            ErrorKind::Negative(fwd) => DnsError::NoRecordsFound(fwd.into()).into(),
-            _ => Self::from(e.to_string()),
         }
     }
 }

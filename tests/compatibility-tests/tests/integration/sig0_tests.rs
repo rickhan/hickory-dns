@@ -14,22 +14,23 @@ use std::sync::Arc;
 use rustls_pki_types::PrivatePkcs8KeyDer;
 use time::Duration;
 
-use hickory_compatibility::named_process;
-use hickory_proto::client::{Client, ClientHandle};
+use hickory_compatibility::NamedProcess;
+use hickory_net::client::{Client, ClientHandle};
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::udp::UdpClientStream;
 use hickory_proto::dnssec::crypto::RsaSigningKey;
-use hickory_proto::dnssec::rdata::key::{KEY, KeyUsage};
+#[allow(deprecated)]
+use hickory_proto::dnssec::rdata::key::{KEY, KeyTrust, KeyUsage, Protocol, UpdateScope};
 use hickory_proto::dnssec::{Algorithm, SigSigner, SigningKey};
 use hickory_proto::op::ResponseCode;
 use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
-use hickory_proto::runtime::TokioRuntimeProvider;
-use hickory_proto::udp::UdpClientStream;
 
 #[tokio::test]
 async fn test_get() {
     test_support::subscribe();
 
-    let (_process, port) = named_process();
+    let (_process, port) = NamedProcess::start();
     let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     let conn = UdpClientStream::builder(socket, TokioRuntimeProvider::default()).build();
     let (mut client, driver) = Client::<TokioRuntimeProvider>::connect(conn)
@@ -62,10 +63,11 @@ async fn test_create() {
     let key =
         RsaSigningKey::from_pkcs8(&PrivatePkcs8KeyDer::from(KEY), Algorithm::RSASHA256).unwrap();
     let sig0key = KEY::new(
-        Default::default(),
+        KeyTrust::default(),
         KeyUsage::Entity,
-        Default::default(),
-        Default::default(),
+        #[allow(deprecated)]
+        UpdateScope::default(),
+        Protocol::default(),
         Algorithm::RSASHA256,
         key.to_public_key().unwrap().into_inner(),
     );
@@ -77,7 +79,7 @@ async fn test_create() {
     );
     assert_eq!(signer.calculate_key_tag().unwrap(), 56935);
 
-    let (_process, port) = named_process();
+    let (_process, port) = NamedProcess::start();
     let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     let conn = UdpClientStream::builder(socket, TokioRuntimeProvider::default())
         .with_signer(Some(Arc::new(signer)))

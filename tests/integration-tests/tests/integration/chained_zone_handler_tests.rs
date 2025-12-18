@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use hickory_integration::TestResponseHandler;
+use hickory_net::{
+    runtime::{Time, TokioTime},
+    xfer::Protocol,
+};
 use hickory_proto::{
     op::{Message, MessageType, Query, ResponseCode, ResponseSigner},
     rr::{LowerName, Name, RData, Record, RecordSet, RecordType, rdata::A},
-    runtime::{Time, TokioTime},
     serialize::binary::BinEncodable,
-    xfer::Protocol,
 };
 #[cfg(feature = "__dnssec")]
 use hickory_server::{dnssec::NxProofKind, zone_handler::Nsec3QueryInfo};
@@ -160,8 +162,8 @@ struct TestZoneHandler {
 }
 
 impl TestZoneHandler {
-    pub fn new(origin: Name, lookup_records: TestRecords, consult_records: TestRecords) -> Self {
-        TestZoneHandler {
+    fn new(origin: Name, lookup_records: TestRecords, consult_records: TestRecords) -> Self {
+        Self {
             origin: origin.into(),
             zone_type: ZoneType::External,
             lookup_records,
@@ -328,7 +330,7 @@ fn inner_lookup(
                         ResponseCode::NXDomain,
                     ))));
                 }
-                ResponseType::Skip => return Some(LookupControlFlow::Skip),
+                ResponseType::Skip => return Some(Skip),
             }
         }
     }

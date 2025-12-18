@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use std::{
     cmp,
     fmt::Debug,
-    io,
     marker::PhantomData,
     net::IpAddr,
     sync::{
@@ -20,28 +19,31 @@ use std::{
 };
 
 use futures_util::lock::Mutex as AsyncMutex;
+#[cfg(all(feature = "metrics", any(feature = "__tls", feature = "__quic")))]
+use metrics::{Counter, Histogram, counter, describe_counter, describe_histogram, histogram};
 #[cfg(feature = "metrics")]
-use metrics::{
-    Counter, Gauge, Histogram, Unit, counter, describe_counter, describe_gauge, describe_histogram,
-    gauge, histogram,
-};
+use metrics::{Gauge, Unit, describe_gauge, gauge};
 use parking_lot::Mutex as SyncMutex;
 #[cfg(test)]
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, warn};
 
-use crate::config::{
-    ConnectionConfig, NameServerConfig, OpportunisticEncryption, ResolverOpts,
-    ServerOrderingStrategy,
-};
-use crate::connection_provider::ConnectionProvider;
-use crate::name_server_pool::{NameServerTransportState, PoolContext};
-use crate::proto::{
-    DnsError, NetError, NetErrorKind, NoRecords,
-    op::{DnsRequest, DnsRequestOptions, DnsResponse, Query, ResponseCode},
-    rr::{Name, RecordType},
-    runtime::{RuntimeProvider, Spawn},
-    xfer::{DnsHandle, FirstAnswer, Protocol},
+use crate::{
+    config::{
+        ConnectionConfig, NameServerConfig, OpportunisticEncryption, ResolverOpts,
+        ServerOrderingStrategy,
+    },
+    connection_provider::ConnectionProvider,
+    name_server_pool::{NameServerTransportState, PoolContext},
+    net::{
+        DnsError, NetError, NoRecords,
+        runtime::{RuntimeProvider, Spawn},
+        xfer::{DnsHandle, FirstAnswer, Protocol},
+    },
+    proto::{
+        op::{DnsRequest, DnsRequestOptions, DnsResponse, Query, ResponseCode},
+        rr::{Name, RecordType},
+    },
 };
 
 /// A remote DNS server, identified by its IP address.
@@ -156,17 +158,17 @@ impl<P: ConnectionProvider> NameServer<P> {
                 meta.set_status(Status::Failed);
 
                 // record the failure
-                match &error.kind {
-                    NetErrorKind::Busy | NetErrorKind::Io(_) | NetErrorKind::Timeout => {
+                match &error {
+                    NetError::Busy | NetError::Io(_) | NetError::Timeout => {
                         meta.srtt.record_failure()
                     }
                     #[cfg(feature = "__quic")]
-                    NetErrorKind::QuinnConfigError(_)
-                    | NetErrorKind::QuinnConnect(_)
-                    | NetErrorKind::QuinnConnection(_)
-                    | NetErrorKind::QuinnTlsConfigError(_) => meta.srtt.record_failure(),
+                    NetError::QuinnConfigError(_)
+                    | NetError::QuinnConnect(_)
+                    | NetError::QuinnConnection(_)
+                    | NetError::QuinnTlsConfigError(_) => meta.srtt.record_failure(),
                     #[cfg(feature = "__tls")]
-                    NetErrorKind::RustlsError(_) => meta.srtt.record_failure(),
+                    NetError::RustlsError(_) => meta.srtt.record_failure(),
                     _ => {}
                 }
 
@@ -209,7 +211,7 @@ impl<P: ConnectionProvider> NameServer<P> {
                 &cx.opportunistic_encryption,
                 &self.config.connections,
             )
-            .ok_or_else(|| NetError::from(NetErrorKind::NoConnections))?;
+            .ok_or(NetError::NoConnections)?;
 
         let protocol = config.protocol.to_protocol();
         if cx.opportunistic_encryption.is_enabled() && protocol.is_encrypted() {
@@ -360,7 +362,7 @@ impl<P: ConnectionProvider> ProbeRequest<P> {
         ns: &NameServer<P>,
         cx: &Arc<PoolContext>,
         #[cfg(feature = "metrics")] metrics: ProbeMetrics,
-    ) -> Result<Self, io::Error> {
+    ) -> Result<Self, NetError> {
         Ok(Self {
             ip: ns.config.ip,
             proto: config.protocol.to_protocol(),
@@ -484,15 +486,15 @@ impl ProbeMetrics {
     }
 
     fn increment_errors(&self, proto: Protocol, err: &NetError) {
-        match (&err.kind, proto) {
+        match (&err, proto) {
             #[cfg(feature = "__tls")]
-            (NetErrorKind::Timeout, Protocol::Tls) => {
+            (NetError::Timeout, Protocol::Tls) => {
                 self.tls_probe_metrics.probe_timeouts.increment(1)
             }
             #[cfg(feature = "__tls")]
             (_, Protocol::Tls) => self.tls_probe_metrics.probe_errors.increment(1),
             #[cfg(feature = "__quic")]
-            (NetErrorKind::Timeout, Protocol::Quic) => {
+            (NetError::Timeout, Protocol::Quic) => {
                 self.quic_probe_metrics.probe_timeouts.increment(1)
             }
             #[cfg(feature = "__quic")]
@@ -515,6 +517,10 @@ impl ProbeMetrics {
         }
     }
 
+    #[cfg_attr(
+        not(any(feature = "__tls", feature = "__quic")),
+        allow(unused_variables)
+    )]
     fn record_probe_duration(&self, proto: Protocol, duration: Duration) {
         match proto {
             #[cfg(feature = "__tls")]
@@ -548,7 +554,7 @@ impl Default for ProbeMetrics {
     }
 }
 
-#[cfg(feature = "metrics")]
+#[cfg(all(feature = "metrics", any(feature = "__tls", feature = "__quic")))]
 #[derive(Clone)]
 struct ProbeProtocolMetrics {
     probe_attempts: Counter,
@@ -558,7 +564,7 @@ struct ProbeProtocolMetrics {
     probe_duration: Histogram,
 }
 
-#[cfg(feature = "metrics")]
+#[cfg(all(feature = "metrics", any(feature = "__tls", feature = "__quic")))]
 impl ProbeProtocolMetrics {
     fn new(protocol: Protocol) -> Self {
         describe_counter!(
@@ -1000,10 +1006,10 @@ mod tests {
     use super::*;
     use crate::config::{ConnectionConfig, ProtocolConfig};
     use crate::connection_provider::TlsConfig;
+    use crate::net::runtime::TokioRuntimeProvider;
     use crate::proto::op::{DnsRequest, DnsRequestOptions, Message, Query, ResponseCode};
     use crate::proto::rr::rdata::NULL;
     use crate::proto::rr::{Name, RData, Record, RecordType};
-    use crate::proto::runtime::TokioRuntimeProvider;
 
     #[tokio::test]
     async fn test_name_server() {
@@ -1305,13 +1311,11 @@ mod opportunistic_enc_tests {
     use crate::connection_provider::{ConnectionProvider, TlsConfig};
     use crate::name_server::{ConnectionPolicy, ConnectionState, NameServer};
     use crate::name_server_pool::{NameServerTransportState, PoolContext};
-    #[cfg(feature = "metrics")]
-    use crate::proto::NetErrorKind;
+    use crate::net::runtime::iocompat::AsyncIoTokioAsStd;
+    use crate::net::runtime::{RuntimeProvider, Spawn, TokioTime};
+    use crate::net::xfer::Protocol;
+    use crate::net::{DnsHandle, NetError};
     use crate::proto::op::{DnsRequest, DnsResponse, Message, ResponseCode};
-    use crate::proto::runtime::iocompat::AsyncIoTokioAsStd;
-    use crate::proto::runtime::{RuntimeProvider, Spawn, TokioTime};
-    use crate::proto::xfer::Protocol;
-    use crate::proto::{DnsHandle, NetError};
 
     #[tokio::test]
     async fn test_select_connection_opportunistic_enc_disabled() {
@@ -1978,7 +1982,7 @@ mod opportunistic_enc_tests {
                     ),
                     // Configure a mock provider that always produces a Timeout error when new connections are requested.
                     &MockProvider {
-                        new_connection_error: Some(NetError::from(NetErrorKind::Timeout)),
+                        new_connection_error: Some(NetError::Timeout),
                         ..MockProvider::default()
                     },
                 )
@@ -2099,7 +2103,7 @@ mod opportunistic_enc_tests {
             ip: IpAddr,
             config: &ConnectionConfig,
             _cx: &PoolContext,
-        ) -> Result<Self::FutureConn, std::io::Error> {
+        ) -> Result<Self::FutureConn, NetError> {
             self.new_connection_calls
                 .lock()
                 .push((ip, config.protocol.clone()));
@@ -2168,7 +2172,7 @@ mod opportunistic_enc_tests {
             _server_addr: std::net::SocketAddr,
             _bind_addr: Option<std::net::SocketAddr>,
             _timeout: Option<Duration>,
-        ) -> Pin<Box<dyn Future<Output = std::io::Result<Self::Tcp>> + Send>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Self::Tcp, NetError>> + Send>> {
             unimplemented!();
         }
 
@@ -2177,7 +2181,7 @@ mod opportunistic_enc_tests {
             &self,
             _local_addr: std::net::SocketAddr,
             _server_addr: std::net::SocketAddr,
-        ) -> Pin<Box<dyn Future<Output = std::io::Result<Self::Udp>> + Send>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Self::Udp, NetError>> + Send>> {
             unimplemented!();
         }
     }
