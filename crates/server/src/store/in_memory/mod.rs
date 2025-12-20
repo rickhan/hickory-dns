@@ -418,7 +418,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
             .and_then(|a| maybe_next_name(a, query_type))
             .and_then(|(search_name, search_type)| {
                 inner
-                    .additional_search(name, query_type, search_name, search_type, lookup_options)
+                    .additional_search(name, query_type, search_name, search_type, lookup_options, self.origin())
                     .map(|adds| (adds, search_type))
             })
             .map(|(record_sets, record_type)| {

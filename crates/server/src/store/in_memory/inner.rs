@@ -320,6 +320,7 @@ impl InnerInMemory {
         next_name: LowerName,
         _search_type: RecordType,
         lookup_options: LookupOptions,
+        origin: &LowerName
     ) -> Option<Vec<Arc<RecordSet>>> {
         let mut additionals: Vec<Arc<RecordSet>> = vec![];
 
@@ -351,7 +352,7 @@ impl InnerInMemory {
                     break;
                 }
 
-                let additional = self.inner_lookup(&search, *query_type, lookup_options);
+                let additional = self.inner_lookup(&search, *query_type, lookup_options, origin);
                 names.insert(search);
 
                 if let Some(additional) = additional {
