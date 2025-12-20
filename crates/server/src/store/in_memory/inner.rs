@@ -200,14 +200,25 @@ impl InnerInMemory {
         name: &LowerName,
         record_type: RecordType,
         lookup_options: LookupOptions,
+        origin: &LowerName,
     ) -> Option<Arc<RecordSet>> {
+        if name.num_labels() < origin.num_labels() {
+            return None;
+        }
+
+        let is_root = origin == name;
         // this range covers all the records for any of the RecordTypes at a given label.
         let start_range_key = RrKey::new(name.clone(), RecordType::Unknown(u16::MIN));
         let end_range_key = RrKey::new(name.clone(), RecordType::Unknown(u16::MAX));
 
-        fn aname_covers_type(key_type: RecordType, query_type: RecordType) -> bool {
+        // fn aname_covers_type(key_type: RecordType, query_type: RecordType) -> bool {
+        //     (query_type == RecordType::A || query_type == RecordType::AAAA)
+        //         && key_type == RecordType::ANAME
+        // }
+
+        fn root_cname_covers_type(key_type: RecordType, query_type: RecordType) -> bool {
             (query_type == RecordType::A || query_type == RecordType::AAAA)
-                && key_type == RecordType::ANAME
+                && key_type == RecordType::CNAME
         }
 
         let lookup = self
@@ -216,14 +227,14 @@ impl InnerInMemory {
             // remember CNAME can be the only record at a particular label
             .find(|(key, _)| {
                 key.record_type == record_type
-                    || key.record_type == RecordType::CNAME
-                    || aname_covers_type(key.record_type, record_type)
+                    || (!is_root && key.record_type == RecordType::CNAME)
+                    || (is_root && root_cname_covers_type(key.record_type, record_type))
             })
             .map(|(_key, rr_set)| rr_set);
 
         // TODO: maybe unwrap this recursion.
         match lookup {
-            None => self.inner_lookup_wildcard(name, record_type, lookup_options),
+            None => self.inner_lookup_wildcard(name, record_type, lookup_options, origin),
             l => l.cloned(),
         }
     }
@@ -233,15 +244,17 @@ impl InnerInMemory {
         name: &LowerName,
         record_type: RecordType,
         lookup_options: LookupOptions,
+        origin: &LowerName,
     ) -> Option<Arc<RecordSet>> {
         // if this is a wildcard or a root, both should break continued lookups
-        if name.is_wildcard() || name.is_root() {
+        if name.is_wildcard() || name.is_root() || name.num_labels() < origin.num_labels() {
             return None;
         }
 
         let mut wildcard = name.clone().into_wildcard();
         loop {
-            let Some(rrset) = self.inner_lookup(&wildcard, record_type, lookup_options) else {
+            let Some(rrset) = self.inner_lookup(&wildcard, record_type, lookup_options, origin)
+            else {
                 let parent = wildcard.base_name();
                 if parent.is_root() {
                     return None;

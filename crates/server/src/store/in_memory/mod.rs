@@ -409,7 +409,7 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
         };
 
         let answer = inner
-            .inner_lookup(name, query_type, lookup_options)
+            .inner_lookup(name, query_type, lookup_options, self.origin())
             .map(|rrset| filter_recordset_by_location(rrset, &client_ip, ip_loc));
 
         // evaluate any cnames for additional inclusion
