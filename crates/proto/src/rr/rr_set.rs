@@ -224,6 +224,14 @@ impl RecordSet {
         self.insert(record, 0)
     }
 
+    /// creates a new Record as part of this RecordSet, adding the associated weight
+    pub fn add_rdata_weight(&mut self, rdata: RData, weight: u32) -> bool {
+        debug_assert_eq!(self.record_type, rdata.record_type());
+        let mut record = Record::from_rdata(self.name.clone(), self.ttl, rdata);
+        record.set_weight(weight);
+        self.insert(record, 0)
+    }
+
     /// creates a new Record as part of this RecordSet, adding the associated RData and lines and weight
     pub fn add_rdata_line_weight(
         &mut self,

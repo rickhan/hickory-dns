@@ -116,10 +116,10 @@ impl<P: RuntimeProvider + Send + Sync> InMemoryZoneHandler<P> {
         let iter = records.into_values();
 
         // add soa to the records
-        for mut rrset in iter {
+        for rrset in iter {
             let name = rrset.name().clone();
             let rr_type = rrset.record_type();
-            rrset.fix_record_weight();
+            // rrset.fix_record_weight();
             for record in rrset.records_without_rrsigs() {
                 if !inner.upsert(record.clone(), serial, this.class) {
                     return Err(format!(
@@ -867,33 +867,29 @@ fn filter_recordset_by_weight(rrset: Arc<RecordSet>) -> Arc<RecordSet> {
     }
 
     if !rrset.has_weight() {
-        // 不设置权重
-        println!("no weight found!");
         return rrset;
     }
 
     let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
-    let mut max_weight: u32 = 0; // 在加载时，就已设置好
+    let mut total_weight: u32 = 0;
     for r in rrset.records_without_rrsigs() {
-        println!("r = {:?}", r);
         let w = r.weight();
+        total_weight += w;
         if w == 0 {
             new.add_rdata(r.data().clone());
-        } else {
-            if max_weight < w {
-                max_weight = 2;
-            }
         }
     }
 
-    if max_weight > 0 {
-        let w = rand::random::<u32>() % max_weight;
+    if total_weight > 0 {
+        let w = rand::random::<u32>() % total_weight;
+        let mut now_weight = 0;
         for r in rrset.records_without_rrsigs() {
-            let weight = r.weight();
+            let weight = r.weight() + now_weight;
             if weight > 0 && w < weight {
                 new.add_rdata(r.data().clone());
                 break;
             }
+            now_weight += weight;
         }
     }
 
@@ -917,7 +913,7 @@ fn filter_recordset_by_location(
         let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
         for r in rrset.records_without_rrsigs() {
             if r.line_info().is_none() {
-                new.add_rdata(r.data().clone());
+                new.add_rdata_weight(r.data().clone(), r.weight());
             }
         }
         return Arc::new(new);
@@ -930,7 +926,8 @@ fn filter_recordset_by_location(
     for r in rrset.records_without_rrsigs() {
         if let Some(meta_loc) = r.line_info() {
             if location_match(&client_loc, meta_loc) {
-                new.add_rdata(r.data().clone());
+                // new.add_rdata(r.data().clone());
+                new.add_rdata_weight(r.data().clone(), r.weight());
             }
         }
     }
@@ -942,7 +939,8 @@ fn filter_recordset_by_location(
     // 默认记录
     for r in rrset.records_without_rrsigs() {
         if r.line_info().is_none() {
-            new.add_rdata(r.data().clone());
+            // new.add_rdata(r.data().clone());
+            new.add_rdata_weight(r.data().clone(), r.weight());
         }
     }
     Arc::new(new)
@@ -955,7 +953,7 @@ fn filter_by_line(rrset: Arc<RecordSet>, client_loc: &Option<LineInfo>) -> Arc<R
         for r in rrset.records_without_rrsigs() {
             if let Some(meta_loc) = r.line_info() {
                 if location_match(client_loc, meta_loc) {
-                    new.add_rdata(r.data().clone());
+                    new.add_rdata_weight(r.data().clone(), r.weight());
                 }
             }
         }
@@ -968,7 +966,7 @@ fn filter_by_line(rrset: Arc<RecordSet>, client_loc: &Option<LineInfo>) -> Arc<R
     // 没有匹配项，再填充默认项
     for r in rrset.records_without_rrsigs() {
         if r.line_info().is_none() {
-            new.add_rdata(r.data().clone());
+            new.add_rdata_weight(r.data().clone(), r.weight());
         }
     }
     Arc::new(new)
