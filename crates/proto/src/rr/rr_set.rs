@@ -231,6 +231,18 @@ impl RecordSet {
         record.set_line(line).set_weight(weight);
         self.insert(record, 0)
     }
+
+    /// accumlative record weight
+    pub fn fix_record_weight(&mut self) {
+        let mut weight = 0;
+        for r in &mut self.records {
+            let w = r.weight();
+            if w > 0 {
+                weight += w;
+                r.set_weight(weight);
+            }
+        }
+    }
     /// Inserts a new Resource Record into the Set.
     ///
     /// If the record is inserted, the ttl for the most recent record will be used for the ttl of

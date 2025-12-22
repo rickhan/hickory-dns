@@ -11,7 +11,6 @@ use std::{
     collections::BTreeMap,
     fs,
     marker::PhantomData,
-    net::{IpAddr, Ipv4Addr},
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
@@ -117,10 +116,10 @@ impl<P: RuntimeProvider + Send + Sync> InMemoryZoneHandler<P> {
         let iter = records.into_values();
 
         // add soa to the records
-        for rrset in iter {
+        for mut rrset in iter {
             let name = rrset.name().clone();
             let rr_type = rrset.record_type();
-
+            rrset.fix_record_weight();
             for record in rrset.records_without_rrsigs() {
                 if !inner.upsert(record.clone(), serial, this.class) {
                     return Err(format!(
