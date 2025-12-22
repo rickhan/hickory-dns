@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashSet},
-    net::IpAddr,
     sync::Arc,
 };
 #[cfg(feature = "__dnssec")]
@@ -34,7 +33,7 @@ use crate::{
     proto::rr::{
         DNSClass, LowerName, Name, RData, Record, RecordSet, RecordType, RrKey, rdata::SOA,
     },
-    zone_handler::{IpLocationInfo, LookupOptions},
+    zone_handler::LookupOptions,
 };
 
 #[derive(Default)]

@@ -856,7 +856,7 @@ fn filter_recordset_by_weight(rrset: Arc<RecordSet>) -> Arc<RecordSet> {
     }
 
     let rtype = rrset.record_type();
-    if (rtype != RecordType::A && rtype != RecordType::AAAA && rtype != RecordType::CNAME) {
+    if rtype != RecordType::A && rtype != RecordType::AAAA && rtype != RecordType::CNAME {
         return rrset;
     }
 
@@ -868,12 +868,14 @@ fn filter_recordset_by_weight(rrset: Arc<RecordSet>) -> Arc<RecordSet> {
 
     if !rrset.has_weight() {
         // 不设置权重
+        println!("no weight found!");
         return rrset;
     }
 
     let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
     let mut max_weight: u32 = 0; // 在加载时，就已设置好
     for r in rrset.records_without_rrsigs() {
+        println!("r = {:?}", r);
         let w = r.weight();
         if w == 0 {
             new.add_rdata(r.data().clone());
