@@ -889,7 +889,7 @@ fn filter_recordset_by_weight(rrset: Arc<RecordSet>) -> Arc<RecordSet> {
                 new.add_rdata(r.data().clone());
                 break;
             }
-            now_weight += weight;
+            now_weight += r.weight();
         }
     }
 
