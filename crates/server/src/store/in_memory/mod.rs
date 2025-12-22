@@ -410,7 +410,8 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
 
         let answer = inner
             .inner_lookup(name, query_type, lookup_options, self.origin())
-            .map(|rrset| filter_recordset_by_location(rrset, &client_ip, ip_loc));
+            .map(|rrset| filter_recordset_by_location(rrset, &client_ip, ip_loc))
+            .map(|rrset| filter_recordset_by_weight(rrset));
 
         // evaluate any cnames for additional inclusion
         let additionals_root_chain_type: Option<(_, _)> = answer
@@ -418,7 +419,14 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
             .and_then(|a| maybe_next_name(a, query_type))
             .and_then(|(search_name, search_type)| {
                 inner
-                    .additional_search(name, query_type, search_name, search_type, lookup_options, self.origin())
+                    .additional_search(
+                        name,
+                        query_type,
+                        search_name,
+                        search_type,
+                        lookup_options,
+                        self.origin(),
+                    )
                     .map(|adds| (adds, search_type))
             })
             .map(|(record_sets, record_type)| {
@@ -434,6 +442,16 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
                 } else {
                     (record_sets, record_type)
                 }
+            })
+            .map(|(record_sets, record_type)| {
+                // 权重负载
+                (
+                    record_sets
+                        .into_iter()
+                        .map(|f| filter_recordset_by_weight(f))
+                        .collect::<Vec<_>>(),
+                    record_type,
+                )
             });
 
         // if the chain started with an ANAME, take the A or AAAA record from the list
@@ -829,6 +847,56 @@ pub(crate) fn zone_from_path(
     info!("zone file loaded: {origin} with {} records", records.len());
     debug!("zone: {records:#?}");
     Ok(records)
+}
+
+/// 根据权重筛随机筛选rdata
+#[inline]
+fn filter_recordset_by_weight(rrset: Arc<RecordSet>) -> Arc<RecordSet> {
+    if rrset.is_empty() {
+        return rrset;
+    }
+
+    let rtype = rrset.record_type();
+    if (rtype != RecordType::A && rtype != RecordType::AAAA && rtype != RecordType::CNAME) {
+        return rrset;
+    }
+
+    let record_num = rrset.records_num();
+    if record_num <= 1 {
+        // 只有一个，就没必要再按权重处理了
+        return rrset;
+    }
+
+    if !rrset.has_weight() {
+        // 不设置权重
+        return rrset;
+    }
+
+    let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
+    let mut max_weight: u32 = 0; // 在加载时，就已设置好
+    for r in rrset.records_without_rrsigs() {
+        let w = r.weight();
+        if w == 0 {
+            new.add_rdata(r.data().clone());
+        } else {
+            if max_weight < w {
+                max_weight = 2;
+            }
+        }
+    }
+
+    if max_weight > 0 {
+        let w = rand::random::<u32>() % max_weight;
+        for r in rrset.records_without_rrsigs() {
+            let weight = r.weight();
+            if weight > 0 && w < weight {
+                new.add_rdata(r.data().clone());
+                break;
+            }
+        }
+    }
+
+    Arc::new(new)
 }
 
 /// 根据客户端的ip地址，筛选出合知的rdata

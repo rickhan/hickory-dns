@@ -9,7 +9,7 @@
 
 use alloc::{borrow::ToOwned, boxed::Box};
 use core::{cmp::Ordering, convert::TryFrom, fmt};
-use std::vec::Vec;
+// use std::vec::Vec;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -83,6 +83,7 @@ pub struct Record<R: RecordData = RData> {
     #[cfg(feature = "__dnssec")]
     proof: Proof,
     line_info: Option<LineInfo>,
+    weight: u32,
 }
 
 impl Record {
@@ -98,6 +99,7 @@ impl Record {
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
             line_info: None,
+            weight: 0,
         }
     }
 }
@@ -115,6 +117,7 @@ impl Record {
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
             line_info: None,
+            weight: 0,
         }
     }
 
@@ -146,6 +149,7 @@ impl<R: RecordData> Record<R> {
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
             line_info: None,
+            weight: 0,
         }
     }
 
@@ -161,6 +165,7 @@ impl<R: RecordData> Record<R> {
             #[cfg(feature = "__dnssec")]
             proof,
             line_info,
+            weight,
         } = self;
 
         Some(Record {
@@ -173,6 +178,7 @@ impl<R: RecordData> Record<R> {
             #[cfg(feature = "__dnssec")]
             proof,
             line_info,
+            weight,
         })
     }
 
@@ -188,6 +194,7 @@ impl<R: RecordData> Record<R> {
             #[cfg(feature = "__dnssec")]
             proof,
             line_info,
+            weight,
         } = self;
 
         let rdata: RData = RecordData::into_rdata(rdata);
@@ -202,6 +209,7 @@ impl<R: RecordData> Record<R> {
             #[cfg(feature = "__dnssec")]
             proof,
             line_info,
+            weight,
         }
     }
 
@@ -265,6 +273,12 @@ impl<R: RecordData> Record<R> {
     /// Set the Lines information for this record
     pub fn set_line(&mut self, line_info: Option<LineInfo>) -> &mut Self {
         self.line_info = line_info;
+        self
+    }
+
+    /// Set the weight for this record
+    pub fn set_weight(&mut self, weight: u32) -> &mut Self {
+        self.weight = weight;
         self
     }
 
@@ -337,6 +351,12 @@ impl<R: RecordData> Record<R> {
     pub fn line_info(&self) -> &Option<LineInfo> {
         &self.line_info
     }
+
+    /// The weight of this record
+    #[inline]
+    pub fn weight(&self) -> u32 {
+        self.weight
+    }
 }
 
 /// Consumes `Record` giving public access to fields of `Record` so they can
@@ -358,6 +378,8 @@ pub struct RecordParts<R: RecordData = RData> {
     pub proof: Proof,
     /// line info
     pub line_info: Option<LineInfo>,
+    /// weight
+    pub weight: u32,
 }
 
 impl<R: RecordData> From<Record<R>> for RecordParts<R> {
@@ -372,6 +394,7 @@ impl<R: RecordData> From<Record<R>> for RecordParts<R> {
             #[cfg(feature = "__dnssec")]
             proof,
             line_info,
+            weight,
         } = record;
 
         Self {
@@ -384,6 +407,7 @@ impl<R: RecordData> From<Record<R>> for RecordParts<R> {
             #[cfg(feature = "__dnssec")]
             proof,
             line_info,
+            weight,
         }
     }
 }
@@ -518,6 +542,7 @@ impl<'r> BinDecodable<'r> for Record<RData> {
             #[cfg(feature = "__dnssec")]
             proof: Proof::default(),
             line_info: None,
+            weight: 0,
         })
     }
 }
@@ -742,6 +767,7 @@ impl<R: RecordData> RecordRef<'_, R> {
             #[cfg(feature = "__dnssec")]
             proof: self.proof,
             line_info: None,
+            weight: 0,
         }
     }
 
@@ -805,6 +831,7 @@ impl<'a, R: RecordData> TryFrom<&'a Record> for RecordRef<'a, R> {
             #[cfg(feature = "__dnssec")]
             proof,
             line_info,
+            weight,
         } = record;
 
         match R::try_borrow(rdata) {

@@ -425,6 +425,16 @@ impl RecordSet {
     pub fn has_line_info(&self) -> bool {
         self.records.iter().any(|f| f.line_info().is_some())
     }
+
+    /// records num
+    pub fn records_num(&self) -> usize {
+        self.records.len()
+    }
+
+    /// has weight > 0
+    pub fn has_weight(&self) -> bool {
+        self.records.iter().any(|f| f.weight() > 0)
+    }
 }
 
 /// Consumes `RecordSet` giving public access to fields of `RecordSet` so they can

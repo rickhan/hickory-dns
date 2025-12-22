@@ -124,6 +124,7 @@ tokio-util.workspace = true
 hickory-proto = { workspace = true, features = ["serde", "text-parsing", "tokio"] }
 hickory-resolver = { workspace = true, features = ["serde", "system-config", "tokio"], optional = true }
 metrics = { workspace = true, optional = true }
+rand.workspace = true
 
 [dev-dependencies]
 futures-executor = { workspace = true, default-features = false, features = ["std"] }

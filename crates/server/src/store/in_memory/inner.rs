@@ -320,7 +320,7 @@ impl InnerInMemory {
         next_name: LowerName,
         _search_type: RecordType,
         lookup_options: LookupOptions,
-        origin: &LowerName
+        origin: &LowerName,
     ) -> Option<Vec<Arc<RecordSet>>> {
         let mut additionals: Vec<Arc<RecordSet>> = vec![];
 
