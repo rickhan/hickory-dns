@@ -974,6 +974,23 @@ fn filter_by_line(rrset: Arc<RecordSet>, client_loc: &Option<LineInfo>) -> Arc<R
 
 #[inline]
 fn location_match(client: &LineInfo, rule: &LineInfo) -> bool {
+    // only country filed will be set
+    if rule.not_country {
+        let passed = match &rule.country {
+            None => true,
+            Some(country) => {
+                if country == "中国" {
+                    not_match_filed(&client.country, country)
+                        || (not_match_filed(&client.province, "香港")
+                            && not_match_filed(&client.province, "澳门")
+                            && not_match_filed(&client.province, "台湾"))
+                } else {
+                    not_match_filed(&client.country, country)
+                }
+            }
+        };
+        return passed;
+    }
     match_field(&client.country, &rule.country)
         && match_field(&client.province, &rule.province)
         && match_field(&client.city, &rule.city)
@@ -985,5 +1002,13 @@ fn match_field(client: &Option<String>, rule: &Option<String>) -> bool {
     match rule {
         None => true,
         Some(r) => client.as_ref() == Some(r),
+    }
+}
+
+#[inline]
+fn not_match_filed(client: &Option<String>, rule: &str) -> bool {
+    match client {
+        None => true,
+        Some(r) => r != rule,
     }
 }

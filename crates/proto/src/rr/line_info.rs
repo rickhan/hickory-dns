@@ -31,4 +31,7 @@ pub struct LineInfo {
     pub city: Option<String>,
     /// province info, optional
     pub isp: Option<String>,
+    /// country not equal
+    #[serde(default)]
+    pub not_country: bool,
 }
