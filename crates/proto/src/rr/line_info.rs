@@ -7,7 +7,7 @@
 
 //! line info
 
-use std::string::String;
+use std::{collections::HashSet, string::String};
 
 /// TODO: add documents
 #[derive(
@@ -34,4 +34,6 @@ pub struct LineInfo {
     /// country not equal
     #[serde(default)]
     pub not_country: bool,
+    /// continent
+    pub continent: Option<String>,
 }

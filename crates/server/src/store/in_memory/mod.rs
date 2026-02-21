@@ -991,8 +991,9 @@ fn location_match(client: &LineInfo, rule: &LineInfo) -> bool {
         };
         return passed;
     }
-    match_field(&client.country, &rule.country)
-        && match_field(&client.province, &rule.province)
+    match_field(&client.continent, &rule.continent)
+        && match_field(&client.country, &rule.country)
+        && match_province(&client.province, &rule.province)
         && match_field(&client.city, &rule.city)
         && match_field(&client.isp, &rule.isp)
 }
@@ -1002,6 +1003,21 @@ fn match_field(client: &Option<String>, rule: &Option<String>) -> bool {
     match rule {
         None => true,
         Some(r) => client.as_ref() == Some(r),
+    }
+}
+
+#[inline]
+fn match_province(client: &Option<String>, rule: &Option<String>) -> bool {
+    // 多个省的支持
+    match rule {
+        None => true,
+        Some(r) => {
+            if let Some(c) = client {
+                r.contains(c)
+            } else {
+                false
+            }
+        }
     }
 }
 
