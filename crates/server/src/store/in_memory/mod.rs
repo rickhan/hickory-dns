@@ -981,7 +981,8 @@ fn location_match(client: &LineInfo, rule: &LineInfo) -> bool {
             Some(country) => {
                 if country == "中国" {
                     not_match_filed(&client.country, country)
-                        || (not_match_filed(&client.province, "香港")
+                        || (match_field(&client.country, &rule.country)
+                            && not_match_filed(&client.province, "香港")
                             && not_match_filed(&client.province, "澳门")
                             && not_match_filed(&client.province, "台湾"))
                 } else {
