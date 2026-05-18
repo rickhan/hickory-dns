@@ -247,17 +247,8 @@ impl RecordSet {
     ) -> bool {
         debug_assert_eq!(self.record_type, rdata.record_type());
         let mut record = Record::from_rdata(self.name.clone(), self.ttl, rdata);
-        let has_line = line.is_some();
         record.set_line(line).set_weight(weight);
-        let succ = self.insert(record, 0);
-        if succ {
-            if !has_line {
-                self.has_default = true;
-            } else {
-                self.has_line_info = true;
-            }
-        }
-        succ
+        self.insert(record, 0)
     }
 
     /// accumlative record weight
@@ -411,8 +402,12 @@ impl RecordSet {
             self.ttl = record.ttl();
             self.updated(serial);
             self.records.push(record);
+            self.has_default = self.records.iter().any(|f| f.line_info().is_none());
+            self.has_line_info = self.records.iter().any(|f| f.line_info().is_some());
             true
         } else {
+            self.has_default = self.records.iter().any(|f| f.line_info().is_none());
+            self.has_line_info = self.records.iter().any(|f| f.line_info().is_some());
             replaced
         }
     }
