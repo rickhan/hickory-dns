@@ -9,6 +9,7 @@ use std::{
 };
 
 use cfg_if::cfg_if;
+use hickory_proto::rr::LineInfo;
 #[cfg(feature = "__dnssec")]
 use time::OffsetDateTime;
 #[cfg(feature = "__dnssec")]
@@ -200,6 +201,7 @@ impl InnerInMemory {
         record_type: RecordType,
         lookup_options: LookupOptions,
         origin: &LowerName,
+        client_loc: &Option<LineInfo>,
     ) -> Option<Arc<RecordSet>> {
         if name.num_labels() < origin.num_labels() {
             return None;
@@ -220,20 +222,39 @@ impl InnerInMemory {
                 && key_type == RecordType::CNAME
         }
 
-        let lookup = self
+        // 先匹配带线路的
+        let mut lookup = self
             .records
             .range(&start_range_key..&end_range_key)
             // remember CNAME can be the only record at a particular label
-            .find(|(key, _)| {
-                key.record_type == record_type
-                    || (!is_root && key.record_type == RecordType::CNAME)
-                    || (is_root && root_cname_covers_type(key.record_type, record_type))
+            .find(|(key, rrset)| {
+                rrset.has_line_info()
+                    && (key.record_type == record_type
+                        || (!is_root && key.record_type == RecordType::CNAME)
+                        || (is_root && root_cname_covers_type(key.record_type, record_type)))
+                    && super::location_matched_one(*rrset, &client_loc)
             })
             .map(|(_key, rr_set)| rr_set);
 
+        // 再匹配 default
+        if lookup.is_none() {
+            lookup = self
+                .records
+                .range(&start_range_key..&end_range_key)
+                // remember CNAME can be the only record at a particular label
+                .find(|(key, rrset)| {
+                    rrset.has_default()
+                        && (key.record_type == record_type
+                            || (!is_root && key.record_type == RecordType::CNAME)
+                            || (is_root && root_cname_covers_type(key.record_type, record_type)))
+                })
+                .map(|(_key, rr_set)| rr_set);
+        }
         // TODO: maybe unwrap this recursion.
         match lookup {
-            None => self.inner_lookup_wildcard(name, record_type, lookup_options, origin),
+            None => {
+                self.inner_lookup_wildcard(name, record_type, lookup_options, origin, client_loc)
+            }
             l => l.cloned(),
         }
     }
@@ -244,6 +265,7 @@ impl InnerInMemory {
         record_type: RecordType,
         lookup_options: LookupOptions,
         origin: &LowerName,
+        client_loc: &Option<LineInfo>,
     ) -> Option<Arc<RecordSet>> {
         // if this is a wildcard or a root, both should break continued lookups
         if name.is_wildcard() || name.is_root() || name.num_labels() < origin.num_labels() {
@@ -252,7 +274,8 @@ impl InnerInMemory {
 
         let mut wildcard = name.clone().into_wildcard();
         loop {
-            let Some(rrset) = self.inner_lookup(&wildcard, record_type, lookup_options, origin)
+            let Some(rrset) =
+                self.inner_lookup(&wildcard, record_type, lookup_options, origin, client_loc)
             else {
                 let parent = wildcard.base_name();
                 if parent.is_root() {
@@ -320,6 +343,7 @@ impl InnerInMemory {
         _search_type: RecordType,
         lookup_options: LookupOptions,
         origin: &LowerName,
+        client_loc: &Option<LineInfo>,
     ) -> Option<Vec<Arc<RecordSet>>> {
         let mut additionals: Vec<Arc<RecordSet>> = vec![];
 
@@ -351,7 +375,8 @@ impl InnerInMemory {
                     break;
                 }
 
-                let additional = self.inner_lookup(&search, *query_type, lookup_options, origin);
+                let additional =
+                    self.inner_lookup(&search, *query_type, lookup_options, origin, client_loc);
                 names.insert(search);
 
                 if let Some(additional) = additional {

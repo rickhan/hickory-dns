@@ -22,6 +22,8 @@ pub struct RecordSet {
     records: Vec<Record>,
     rrsigs: Vec<Record>,
     serial: u32, // serial number at which this record was modified
+    has_line_info: bool,
+    has_default: bool,
 }
 
 impl RecordSet {
@@ -48,6 +50,8 @@ impl RecordSet {
             records: Vec::new(),
             rrsigs: Vec::new(),
             serial,
+            has_line_info: false,
+            has_default: false,
         }
     }
 
@@ -73,6 +77,8 @@ impl RecordSet {
             records: Vec::new(),
             rrsigs: Vec::new(),
             serial: 0,
+            has_default: false,
+            has_line_info: false,
         }
     }
 
@@ -241,8 +247,17 @@ impl RecordSet {
     ) -> bool {
         debug_assert_eq!(self.record_type, rdata.record_type());
         let mut record = Record::from_rdata(self.name.clone(), self.ttl, rdata);
+        let has_line = line.is_some();
         record.set_line(line).set_weight(weight);
-        self.insert(record, 0)
+        let succ = self.insert(record, 0);
+        if succ {
+            if !has_line {
+                self.has_default = true;
+            } else {
+                self.has_line_info = true;
+            }
+        }
+        succ
     }
 
     /// accumlative record weight
@@ -456,7 +471,13 @@ impl RecordSet {
 
     /// Has line info for this record set
     pub fn has_line_info(&self) -> bool {
-        self.records.iter().any(|f| f.line_info().is_some())
+        self.has_line_info
+        // self.records.iter().any(|f| f.line_info().is_some())
+    }
+
+    /// Has default line info for this record set
+    pub fn has_default(&self) -> bool {
+        self.has_default
     }
 
     /// records num
@@ -493,6 +514,8 @@ impl From<RecordSet> for RecordSetParts {
             records,
             rrsigs,
             serial,
+            has_default,
+            has_line_info,
         } = rset;
         Self {
             name,
@@ -508,6 +531,8 @@ impl From<RecordSet> for RecordSetParts {
 
 impl From<Record> for RecordSet {
     fn from(record: Record) -> Self {
+        let has_default = record.line_info().is_none();
+        let has_line = record.line_info().is_some();
         Self {
             name: record.name().clone(),
             record_type: record.record_type(),
@@ -516,6 +541,8 @@ impl From<Record> for RecordSet {
             records: vec![record],
             rrsigs: vec![],
             serial: 0,
+            has_default,
+            has_line_info: has_line,
         }
     }
 }

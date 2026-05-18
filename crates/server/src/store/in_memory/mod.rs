@@ -407,9 +407,11 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
             "0.0.0.0".to_string()
         };
 
+        let client_loc = ip_loc.find_ip(&client_ip);
+
         let answer = inner
-            .inner_lookup(name, query_type, lookup_options, self.origin())
-            .map(|rrset| filter_recordset_by_location(rrset, &client_ip, ip_loc))
+            .inner_lookup(name, query_type, lookup_options, self.origin(), &client_loc)
+            .map(|rrset| filter_recordset_by_location(rrset, &client_loc))
             .map(|rrset| filter_recordset_by_weight(rrset));
 
         // evaluate any cnames for additional inclusion
@@ -425,16 +427,15 @@ impl<P: RuntimeProvider + Send + Sync> ZoneHandler for InMemoryZoneHandler<P> {
                         search_type,
                         lookup_options,
                         self.origin(),
+                        &client_loc,
                     )
                     .map(|adds| (adds, search_type))
             })
             .map(|(record_sets, record_type)| {
                 if record_sets.iter().any(|f| f.has_line_info()) {
-                    let client_info = ip_loc.find_ip(&client_ip);
-
                     let new_record_sets = record_sets
                         .into_iter()
-                        .map(|r| filter_by_line(r, &client_info))
+                        .map(|r| filter_by_line(r, &client_loc))
                         .filter(|f| !f.is_empty())
                         .collect::<Vec<Arc<RecordSet>>>();
                     (new_record_sets, record_type)
@@ -896,18 +897,35 @@ fn filter_recordset_by_weight(rrset: Arc<RecordSet>) -> Arc<RecordSet> {
     Arc::new(new)
 }
 
+#[inline]
+fn location_matched_one(rrset: &Arc<RecordSet>, client_loc: &Option<LineInfo>) -> bool {
+    if !rrset.has_line_info() || client_loc.is_none() {
+        // 应该走默认匹配
+        return false;
+    }
+
+    let client_loc = client_loc.as_ref().unwrap();
+    for r in rrset.records_without_rrsigs() {
+        if let Some(meta_loc) = r.line_info() {
+            if location_match(client_loc, meta_loc) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// 根据客户端的ip地址，筛选出合知的rdata
 #[inline]
 fn filter_recordset_by_location(
     rrset: Arc<RecordSet>,
-    client_ip: &str,
-    ip_loc: &dyn IpLocationInfo,
+    client_loc: &Option<LineInfo>,
 ) -> Arc<RecordSet> {
     if !rrset.has_line_info() {
         return rrset;
     }
 
-    let client_loc = ip_loc.find_ip(client_ip);
     if client_loc.is_none() {
         // only default
         let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
@@ -918,14 +936,14 @@ fn filter_recordset_by_location(
         }
         return Arc::new(new);
     }
-    let client_loc = client_loc.unwrap();
+    let client_loc = client_loc.as_ref().unwrap();
 
     let mut new = RecordSet::new(rrset.name().clone(), rrset.record_type(), rrset.ttl());
 
     // 先看看是否有匹配上
     for r in rrset.records_without_rrsigs() {
         if let Some(meta_loc) = r.line_info() {
-            if location_match(&client_loc, meta_loc) {
+            if location_match(client_loc, meta_loc) {
                 // new.add_rdata(r.data().clone());
                 new.add_rdata_weight(r.data().clone(), r.weight());
             }
